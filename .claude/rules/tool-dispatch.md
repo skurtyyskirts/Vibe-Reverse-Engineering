@@ -59,7 +59,7 @@ Exit codes: 0 ok, 1 failed, 3 ran and the answer was negative. Branch on them.
 
 ## Autonomous run state (main agent, <5s)
 
-- `python -m autonomy init|status|step|phase|issue|shot-path|watchdog|finish|report <Game>` — resume-safe state for unattended porting runs; `step` and `watchdog` exit 3 when the loop must change approach. Full loop: `autonomous-remix-port` skill.
+- `python -m autonomy init|status|step|phase|issue|shot-path|watchdog|baseline|finish|report <Game>` — resume-safe state for unattended porting runs; `step` and `watchdog` exit 3 when the loop must change approach. Full loop: `autonomous-remix-port` skill.
 
 ## DX analysis scripts (main agent, fast first-pass)
 

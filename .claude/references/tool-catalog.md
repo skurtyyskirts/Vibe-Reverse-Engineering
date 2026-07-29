@@ -88,6 +88,7 @@ recovery. Full loop: the `autonomous-remix-port` skill.
 - "Record what this iteration did" → `autonomy step --action ... --key ... --outcome ok|fail` (**exit 3 = key exhausted, change approach**)
 - "Is the game still up? put it back if not" → `autonomy watchdog <Game>` (exit 3 = crash loop)
 - "Mark a phase passed" → `autonomy phase <Game> --complete N --gate <evidence>` (evidence required)
+- "Did my change break the scene that already worked?" → `autonomy baseline <Game> --save|--check <label> --image <png>` (exit 3 = the frame no longer matches)
 - "Write the final report" → `autonomy finish` + `autonomy report --out patches/<Game>/findings.md`
 
 ### DX analysis scripts (main agent, fast first-pass)

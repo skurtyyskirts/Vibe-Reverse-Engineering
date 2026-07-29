@@ -8,11 +8,14 @@ Every harness drives this the same way: shell out per iteration, read JSON.
     python -m autonomy step MyGame --action "..." --key nav:title --outcome fail
     python -m autonomy phase MyGame --complete 2 --gate screens/003_2_title.png
     python -m autonomy watchdog MyGame
+    python -m autonomy baseline MyGame --save ingame-lit --image shot.png
+    python -m autonomy baseline MyGame --check ingame-lit --image after.png
     python -m autonomy report MyGame --out patches/MyGame/findings.md
 
 Exit codes: 0 succeeded, 1 the command or the game failed, 2 bad arguments,
 3 the loop must change approach — `step` when an action key hit its attempt
-limit, `watchdog` when the game is in a crash loop.
+limit, `watchdog` when the game is in a crash loop, `baseline --check` when the
+frame no longer matches its reference.
 """
 
 from __future__ import annotations
@@ -109,6 +112,21 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
     return 0 if result["healthy"] else 1
 
 
+def cmd_baseline(args: argparse.Namespace) -> int:
+    from . import baseline as bl
+
+    run = PortRun.open(args.game, patches_dir=args.patches)
+    if args.list:
+        _emit({"baselines": bl.listing(run)})
+        return 0
+    if args.save:
+        _emit(bl.save(run, args.save, args.image, note=args.note or ""))
+        return 0
+    result = bl.check(run, args.check, args.image, threshold=args.threshold)
+    _emit(result)
+    return 0 if result["same"] else EXIT_EXHAUSTED
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     run = PortRun.open(args.game, patches_dir=args.patches)
     text = run.report()
@@ -187,6 +205,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report health without relaunching or dismissing dialogs")
     wd.set_defaults(func=cmd_watchdog)
 
+    base = sub.add_parser("baseline",
+        help="Reference frames for a viewpoint, to catch regressions")
+    base.add_argument("game")
+    group = base.add_mutually_exclusive_group(required=True)
+    group.add_argument("--save", metavar="LABEL",
+        help="Record this capture as the reference for LABEL")
+    group.add_argument("--check", metavar="LABEL",
+        help="Compare a capture against LABEL (exit 3 when it differs)")
+    group.add_argument("--list", action="store_true",
+        help="List saved baselines")
+    base.add_argument("--image", help="Capture to save or compare")
+    base.add_argument("--note", help="What settings produced this frame")
+    base.add_argument("--threshold", type=float, default=None,
+        help="Changed-pixel ratio counting as different (default: the "
+             "renderer noise floor)")
+    base.set_defaults(func=cmd_baseline)
+
     fin = sub.add_parser("finish", help="Close the run with a verdict")
     fin.add_argument("game")
     fin.add_argument("--verdict", required=True,
@@ -210,6 +245,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "issue" and args.add and not args.summary:
         print("error: --add requires --summary", file=sys.stderr)
         return 2
+    if args.cmd == "baseline":
+        if not args.list and not args.image:
+            print("error: --save/--check require --image", file=sys.stderr)
+            return 2
+        if args.threshold is None:
+            from .baseline import NOISE_FLOOR
+            args.threshold = NOISE_FLOOR
     try:
         return args.func(args)
     except (FileNotFoundError, FileExistsError, KeyError, ValueError) as e:

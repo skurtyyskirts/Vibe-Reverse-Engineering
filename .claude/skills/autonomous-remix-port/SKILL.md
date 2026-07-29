@@ -205,10 +205,23 @@ Remix runtime. Capture traces in a **copy of the game directory without the
 Remix runtime**, or with Remix temporarily moved aside; note which in the
 journal. Delegate heavy analysis passes to `static-analyzer`.
 
-Then the live flicker test: preset `debug-geometry-hash`, restart, replay the
-macro, two screenshots 1s apart with the camera still, `screenshot diff`.
-Ratio ≥ ~0.01 on a static scene = unstable hashes; `--tiles 4x3` says whether
-the churn is HUD or world.
+Then the live flicker test. **Measure the noise floor first** — a renderer is
+never bit-identical frame to frame (dithering, temporal accumulation, upscaler
+jitter), so a raw ratio means nothing without knowing what "no change" costs on
+this game:
+
+1. Debug view **off**, camera still, two screenshots 1s apart, `screenshot
+   diff` → that ratio is the floor.
+2. `remix preset apply debug-geometry-hash`, restart, replay the macro, two
+   screenshots 1s apart, `screenshot diff` again.
+
+Hashes are unstable when the second ratio is clearly above the floor, not when
+it is above a fixed constant. `--tiles 4x3` says whether the churn is HUD or
+world, which decides between `rtx.uiTextures` and a geometry hash rule.
+
+Applying `remix preset apply automation` first removes the largest artificial
+source of floor noise (the per-frame memory readout Remix draws into the
+image).
 
 Fix by finding-category (details: `.claude/references/remix-compat-catalog.md`):
 - up-draws / dynamic VBs / vb-churn → `remix preset apply hash-stable-anim`
@@ -261,6 +274,23 @@ fix → restart → macro back in-level → screenshot → compare. Standard seq
 
 Each fix is one iteration with before/after screenshots in the journal.
 
+**Guard what already works.** Settings interact: a sky fix routinely breaks
+lighting three iterations later, and without a reference frame that is only
+found at the end with a dozen changes to bisect. Once a viewpoint looks right,
+save it, and re-check after each later change:
+
+```bash
+python -m autonomy baseline MyGame --save ingame-lit --image screens/031_7_lit.png \
+    --note "fallback light off, sky autodetect 2, UI tagged"
+python -m autonomy baseline MyGame --check ingame-lit --image screens/044_7_after.png
+```
+
+`--check` exits 3 when the frame no longer matches, and names the grid cell
+that changed most. The same mechanism answers the other question: baseline
+immediately *before* a change, and if the check says `unchanged`, the setting
+did not take — a misspelled option, a missed restart, or a debug view that
+never engaged.
+
 ### Phase 8 — Report and persist
 ```bash
 python -m autonomy finish MyGame --verdict success \
@@ -277,7 +307,8 @@ Success criteria, verified end to end once:
 2. hash flicker test passes,
 3. normal render screenshot shows a lit, correctly textured scene with clean
    UI and sky,
-4. all applied settings survive a restart.
+4. all applied settings survive a restart, verified with
+   `autonomy baseline --check` after the final relaunch.
 
 ## Beyond the happy path
 

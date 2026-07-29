@@ -1,6 +1,6 @@
 ---
 name: dynamic-analysis
-description: Use when attaching to or spawning a process for live analysis, setting breakpoints, tracing functions, collecting execution data, inspecting registers/memory/stack at runtime, stepping through code, patching live memory, catching who writes to an address, counting D3D9 draw calls, sending keystrokes or clicks to a game window, analyzing JSONL trace dumps, or performing any dynamic analysis task.
+description: Use when attaching to or spawning a process for live analysis, setting breakpoints, tracing functions, collecting execution data, inspecting registers/memory/stack at runtime, stepping through code, patching live memory, catching who writes to an address, counting D3D9 draw calls, sending keystrokes or clicks to a game window, capturing or diffing game screenshots, controlling the RTX Remix runtime (rtx.conf, presets, dev menu, logs), analyzing JSONL trace dumps, or performing any dynamic analysis task.
 ---
 
 # Dynamic Analysis with livetools
@@ -80,6 +80,22 @@ python -m livetools gamectl --exe <game.exe> key RETURN
 python -m livetools gamectl --exe <game.exe> keys "DOWN DOWN RETURN WAIT:1000 RETURN"
 python -m livetools gamectl --exe <game.exe> click <x> <y>
 python -m livetools gamectl --exe <game.exe> macro <name> --macro-file patches/<game>/macros.json
+```
+
+### Screenshot + Diff (no Frida)
+```
+python -m livetools screenshot grab --exe <game.exe> --out shot.png
+python -m livetools screenshot diff before.png after.png [--threshold 0.01] [--tolerance 4]
+```
+
+### RTX Remix Runtime Control (no Frida)
+```
+python -m livetools remix status --game-dir <DIR>
+python -m livetools remix conf get|set|unset|add-hash|remove-hash ... -d <DIR>
+python -m livetools remix preset list | apply <name> -d <DIR>
+python -m livetools remix menu --exe <game.exe>        # ALT+X chord
+python -m livetools remix log -d <DIR> [--errors] [--tail N]
+python -m livetools remix debugviews
 ```
 
 ### Non-blocking Tracing
@@ -249,7 +265,30 @@ python -m livetools gamectl --exe game.exe click 400 300             # client-ar
 python -m livetools gamectl --exe game.exe macro navigate_menu --macro-file patches/<game>/macros.json
 ```
 
-Key names: `RETURN`, `ESCAPE`, `SPACE`, arrows, `TAB`, `F1`-`F12`, `A`-`Z`, `0`-`9`, `NUMPAD0`-`9`, `SHIFT`, `CTRL`, `ALT`. Sequence tokens: `WAIT:N` (pause N ms), `HOLD:KEY:N` (hold key N ms). Window lookup: `--exe` (preferred) or `--window <title substring>`.
+Key names: `RETURN`, `ESCAPE`, `SPACE`, arrows, `TAB`, `F1`-`F12`, `A`-`Z`, `0`-`9`, `NUMPAD0`-`9`, `SHIFT`, `CTRL`, `ALT`. Sequence tokens: `WAIT:N` (pause N ms), `HOLD:KEY:N` (hold key N ms), `CHORD:A+B` (keys pressed together, released in reverse — e.g. `CHORD:ALT+X` for the Remix menu). `key` also accepts a chord directly: `key ALT+X`. Window lookup: `--exe` (preferred) or `--window <title substring>`.
+
+### screenshot -- Capture the game window, diff two captures
+
+Pure GDI (PrintWindow + BitBlt fallback), no Frida. The agent's eyes during unattended work: capture after every input or config change, Read the PNG, decide the next step. Diff prints changed-pixel ratio and bounding box — verify a menu opened, a debug view engaged, or detect Remix geometry-hash flicker across idle frames. Exclusive-fullscreen games capture black — run windowed/borderless.
+
+```bash
+python -m livetools screenshot grab --exe game.exe --out shot.png [--full-window]
+python -m livetools screenshot diff a.png b.png [--threshold 0.01] [--tolerance 4]
+```
+
+### remix -- RTX Remix runtime control
+
+Detect the Remix runtime, edit rtx.conf (idempotent, auto-backup, comments preserved), apply option presets, toggle the dev menu, tail runtime logs. rtx.conf is read at game launch — conf changes need a restart; only the menu changes settings live. Full option catalog and symptom→fix playbook: `.claude/references/remix-compat-catalog.md`.
+
+```bash
+python -m livetools remix status -d C:/Games/MyGame        # runtime markers, rtx.conf, logs
+python -m livetools remix conf set rtx.debugView.debugViewIdx 277 -d <DIR>
+python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD -d <DIR>
+python -m livetools remix preset apply debug-geometry-hash -d <DIR>   # preset list: devmenu, debug-*, hash-*, fallback-light-*, vertex-capture
+python -m livetools remix menu --exe game.exe              # send ALT+X, screenshot to verify
+python -m livetools remix log -d <DIR> --errors
+python -m livetools remix debugviews                       # known rtx.debugView.debugViewIdx values
+```
 
 ### vishook -- Selective visibility override via code cave
 

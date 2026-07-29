@@ -160,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--diff-frames", nargs=2, type=int, metavar=("A", "B"), help="Compare two frames")
     an.add_argument("--rt-graph", action="store_true", help="Render target dependency graph")
     an.add_argument("--classify-draws", action="store_true", help="Auto-tag draws by render state")
+    an.add_argument("--hash-stability", action="store_true",
+                    help="Flag draws with unstable RTX Remix geometry hashes")
     an.add_argument("--vtx-formats", action="store_true", help="Group draws by vertex declaration")
     an.add_argument("--redundant", action="store_true", help="Find redundant state-set calls")
     an.add_argument("--texture-freq", action="store_true", help="Texture binding frequency")

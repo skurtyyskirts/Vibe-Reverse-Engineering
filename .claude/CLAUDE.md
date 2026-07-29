@@ -28,6 +28,12 @@ Invoke the **`dx9-ffp-port` skill** before editing `renderer.cpp`, `ffp_state.cp
 
 ---
 
+## Autonomous Remix Porting
+
+Invoke the **`autonomous-remix-port` skill** when asked to port or reverse engineer a game for RTX Remix unattended ("while I'm away", overnight, looped): it defines the screenshot-verified game/menu navigation loop, Remix runtime control (rtx.conf via `livetools remix`), hash stabilization, and the resume-safe state machine under `patches/<Game>/autonomy/`.
+
+---
+
 ## References
 
 - **Tool dispatch (which tool, run vs delegate)**: @.claude/rules/tool-dispatch.md
@@ -35,3 +41,5 @@ Invoke the **`dx9-ffp-port` skill** before editing `renderer.cpp`, `ffp_state.cp
 - **Subagent workflow and delegation rules**: @.claude/rules/subagent-workflow.md
 - **DX9 FFP proxy porting for RTX Remix**: `.claude/skills/dx9-ffp-port/SKILL.md` (invoke `dx9-ffp-port` skill, not auto-loaded)
 - **Frida-based dynamic analysis**: `/dynamic-analysis` skill
+- **Autonomous RTX Remix porting**: `.claude/skills/autonomous-remix-port/SKILL.md` (invoke `autonomous-remix-port` skill, not auto-loaded)
+- **RTX Remix rtx.conf options + symptom→fix playbook**: `.claude/references/remix-compat-catalog.md` (read on demand, not auto-loaded)

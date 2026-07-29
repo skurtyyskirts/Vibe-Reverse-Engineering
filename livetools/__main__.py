@@ -42,6 +42,18 @@ Memory watchpoint:
     python -m livetools memwatch read
     python -m livetools memwatch stop
 
+Game window (no Frida needed):
+    python -m livetools gamectl --exe game.exe keys "DOWN DOWN RETURN"
+    python -m livetools screenshot grab --exe game.exe --out shot.png
+    python -m livetools screenshot diff before.png after.png
+
+RTX Remix runtime (no Frida needed):
+    python -m livetools remix status --game-dir DIR
+    python -m livetools remix conf set KEY VALUE --game-dir DIR
+    python -m livetools remix preset apply <name> --game-dir DIR
+    python -m livetools remix menu --exe game.exe
+    python -m livetools remix log --game-dir DIR --errors
+
 Workflow:  attach -> (bp/trace/collect/steptrace/modules) -> analyze -> detach
 
 NOTE: Some games only run rendering/logic when their window is focused.
@@ -639,7 +651,10 @@ def cmd_gamectl(args: argparse.Namespace) -> None:
 
     if action == "key":
         focused = gc.focus_hwnd(hwnd)
-        r = gc.send_key(args.key_name, hold_ms=args.hold_ms)
+        if "+" in args.key_name:
+            r = gc.send_chord(args.key_name, hold_ms=args.hold_ms)
+        else:
+            r = gc.send_key(args.key_name, hold_ms=args.hold_ms)
         print(f"focused={focused} {r}")
 
     elif action == "keys":
@@ -671,6 +686,166 @@ def cmd_gamectl(args: argparse.Namespace) -> None:
 
     else:
         print("Usage: python -m livetools gamectl [info|key|keys|click|macro|macros]")
+
+
+# ── screenshot command ────────────────────────────────────────────────────
+
+def cmd_screenshot(args: argparse.Namespace) -> None:
+    from . import screenshot as ss
+    action = getattr(args, "ss_action", None)
+
+    if action == "grab":
+        from . import gamectl as gc
+        hwnd, err = gc.resolve_hwnd(getattr(args, "exe", None),
+                                    getattr(args, "window", None))
+        if not hwnd:
+            print(f"[error] {err}")
+            return
+        out = Path(args.out) if args.out else ss.default_output_path()
+        try:
+            path = ss.capture_window_png(hwnd, out,
+                                         client_only=not args.full_window)
+        except OSError as e:
+            print(f"[error] capture failed: {e}")
+            return
+        w, h, _ = ss.decode_png(path.read_bytes())
+        print(f"Saved {path} ({w}x{h})")
+
+    elif action == "diff":
+        try:
+            r = ss.diff_png(args.file_a, args.file_b, tolerance=args.tolerance)
+        except (OSError, ValueError) as e:
+            print(f"[error] {e}")
+            return
+        verdict = "CHANGED" if r["ratio"] >= args.threshold else "same"
+        print(f"{r['changed']}/{r['total']} pixels differ "
+              f"(ratio {r['ratio']:.4f}, threshold {args.threshold}) -> {verdict}")
+        if r["bbox"]:
+            x0, y0, x1, y1 = r["bbox"]
+            print(f"  changed region: ({x0},{y0})-({x1},{y1}) "
+                  f"[{x1 - x0 + 1}x{y1 - y0 + 1}]")
+
+    else:
+        print("Usage: python -m livetools screenshot [grab|diff]")
+
+
+# ── remix command ─────────────────────────────────────────────────────────
+
+def cmd_remix(args: argparse.Namespace) -> None:
+    from . import remixctl as rx
+    action = getattr(args, "rx_action", None)
+
+    if action == "status":
+        info = rx.detect_runtime(args.game_dir)
+        print(f"Game dir:  {info['game_dir']}")
+        d3d9 = info["d3d9_dll"]
+        print(f"d3d9.dll:  {'present, %d bytes' % d3d9['size'] if d3d9['present'] else 'MISSING'}")
+        if info["remix_markers"]:
+            print("Remix markers:")
+            for m in info["remix_markers"]:
+                print(f"  - {m}")
+        else:
+            print("Remix markers: none found (runtime not detected)")
+        print(f"rtx.conf:  {info['rtx_conf'] or 'not present'}")
+        if info["rtx_conf"]:
+            options = rx.load_conf(info["rtx_conf"])
+            print(f"  {len(options)} option(s) set")
+            for k in sorted(options):
+                print(f"    {k} = {options[k]}")
+        if info["logs"]:
+            print("Logs:")
+            for lg in info["logs"]:
+                print(f"  {lg['name']:<32s} {lg['size']:>10d} B  {lg['mtime']}")
+
+    elif action == "conf":
+        conf = rx.conf_path(args.game_dir)
+        sub = args.conf_action
+        if sub == "get":
+            options = rx.load_conf(conf)
+            if args.key:
+                val = options.get(args.key)
+                print(f"{args.key} = {val}" if val is not None
+                      else f"{args.key} is not set")
+            else:
+                if not options:
+                    print(f"No options set ({conf} "
+                          f"{'is empty' if conf.is_file() else 'does not exist'})")
+                for k in sorted(options):
+                    print(f"{k} = {options[k]}")
+        elif sub == "set":
+            bak = rx.set_option(conf, args.key, args.value,
+                                backup=not args.no_backup)
+            print(f"{args.key} = {args.value}  written to {conf}")
+            if bak:
+                print(f"  backup: {bak}")
+            print("  (takes effect on next game launch)")
+        elif sub == "unset":
+            removed = rx.unset_option(conf, args.key,
+                                      backup=not args.no_backup)
+            print(f"{args.key} {'removed from' if removed else 'was not set in'} {conf}")
+        elif sub == "add-hash":
+            if args.key not in rx.HASH_SET_OPTIONS:
+                print(f"[warn] {args.key} is not a known hash-set option "
+                      f"(continuing anyway)")
+            hashes = rx.add_hash(conf, args.key, args.hash,
+                                 backup=not args.no_backup)
+            print(f"{args.key} = {', '.join(hashes)}")
+        elif sub == "remove-hash":
+            hashes = rx.remove_hash(conf, args.key, args.hash,
+                                    backup=not args.no_backup)
+            print(f"{args.key} = {', '.join(hashes) if hashes else '(empty, removed)'}")
+        else:
+            print("Usage: python -m livetools remix conf "
+                  "[get|set|unset|add-hash|remove-hash]")
+
+    elif action == "preset":
+        sub = args.preset_action
+        if sub == "list":
+            for name in sorted(rx.PRESETS):
+                print(f"  {name:<24s}  {rx.PRESETS[name]['description']}")
+        elif sub == "apply":
+            if args.name not in rx.PRESETS:
+                print(f"[error] Unknown preset '{args.name}'. "
+                      f"Available: {', '.join(sorted(rx.PRESETS))}")
+                return
+            conf = rx.conf_path(args.game_dir)
+            options = rx.apply_preset(conf, args.name,
+                                      backup=not args.no_backup)
+            print(f"Applied preset '{args.name}' to {conf}:")
+            for k, v in options.items():
+                print(f"  {k} = {v}")
+            print("  (takes effect on next game launch)")
+        else:
+            print("Usage: python -m livetools remix preset [list|apply]")
+
+    elif action == "menu":
+        r = rx.toggle_menu(getattr(args, "exe", None),
+                           getattr(args, "window", None),
+                           chord=args.chord)
+        if r.get("ok"):
+            print(f"Sent {r['combo']} (focused={r.get('focused')}). "
+                  "Screenshot to verify the menu state.")
+        else:
+            print(f"[error] {r.get('error', '?')}")
+
+    elif action == "log":
+        logs = rx.read_logs(args.game_dir, tail=args.tail,
+                            errors_only=args.errors)
+        if not logs:
+            print("No Remix/dxvk logs found.")
+        for name, lines in logs.items():
+            print(f"== {name} (last {len(lines)} line(s)) ==")
+            for ln in lines:
+                print(f"  {ln}")
+
+    elif action == "debugviews":
+        from .remixctl import DEBUG_VIEWS
+        for name, idx in sorted(DEBUG_VIEWS.items(), key=lambda kv: kv[1]):
+            print(f"  {idx:>4d}  {name}")
+
+    else:
+        print("Usage: python -m livetools remix "
+              "[status|conf|preset|menu|log|debugviews]")
 
 
 # ── argument parser ────────────────────────────────────────────────────────
@@ -1047,7 +1222,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Sequence token syntax:\n"
             "  KEY_NAME          — keydown + keyup\n"
             "  WAIT:N            — pause N milliseconds\n"
-            "  HOLD:KEY_NAME:N   — hold key N ms before keyup\n\n"
+            "  HOLD:KEY_NAME:N   — hold key N ms before keyup\n"
+            "  CHORD:A+B         — press together, release reverse (CHORD:ALT+X)\n\n"
             "Examples:\n"
             "  python -m livetools gamectl --exe revolt_xbox.exe info\n"
             "  python -m livetools gamectl --exe revolt_xbox.exe key RETURN\n"
@@ -1067,8 +1243,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     gc_sub.add_parser("info", help="Show hwnd, title, pid for the matched window")
 
-    gc_key = gc_sub.add_parser("key", help="Send a single key press")
-    gc_key.add_argument("key_name", help="Key name (e.g. RETURN, UP, F5, A)")
+    gc_key = gc_sub.add_parser("key", help="Send a single key press or chord")
+    gc_key.add_argument("key_name",
+        help="Key name (e.g. RETURN, UP, F5, A) or chord (e.g. ALT+X)")
     gc_key.add_argument("--hold-ms", type=int, default=50,
         help="Hold duration in ms (default: 50)")
 
@@ -1092,6 +1269,133 @@ def build_parser() -> argparse.ArgumentParser:
     gc_macros = gc_sub.add_parser("macros", help="List all macros in a JSON file")
     gc_macros.add_argument("--macro-file", default="macros.json",
         help="Path to macro JSON file (default: macros.json)")
+
+    # -- screenshot --
+    sp = sub.add_parser("screenshot",
+        help="Capture the game window to PNG, or diff two captures",
+        description=(
+            "Capture a window's pixels (PrintWindow, BitBlt fallback) or\n"
+            "compare two PNG captures pixel-by-pixel.\n\n"
+            "Capture works for windowed/borderless games; exclusive\n"
+            "fullscreen bypasses GDI and captures black — run windowed.\n\n"
+            "Diff prints the changed-pixel ratio and bounding box. Use it to\n"
+            "verify a menu opened, a debug view engaged, or to detect\n"
+            "geometry-hash debug view flicker across identical frames\n"
+            "(= unstable Remix hashes).\n\n"
+            "Examples:\n"
+            "  python -m livetools screenshot grab --exe game.exe --out shot.png\n"
+            "  python -m livetools screenshot grab --window \"Game\" --full-window\n"
+            "  python -m livetools screenshot diff before.png after.png\n"
+            "  python -m livetools screenshot diff f1.png f2.png --threshold 0.02"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ss_sub = sp.add_subparsers(dest="ss_action")
+
+    ss_grab = ss_sub.add_parser("grab", help="Capture the game window to a PNG")
+    ss_grab.add_argument("--exe", "-e", default=None,
+        help="Target process exe name (e.g. game.exe)")
+    ss_grab.add_argument("--window", "-w", default=None,
+        help="Window title substring fallback (case-insensitive)")
+    ss_grab.add_argument("--out", "-o", default=None,
+        help="Output PNG path (default: screenshot_<timestamp>.png)")
+    ss_grab.add_argument("--full-window", action="store_true",
+        help="Capture the full window incl. title bar (default: client area)")
+
+    ss_diff = ss_sub.add_parser("diff", help="Compare two PNG captures")
+    ss_diff.add_argument("file_a", help="First PNG")
+    ss_diff.add_argument("file_b", help="Second PNG")
+    ss_diff.add_argument("--threshold", type=float, default=0.01,
+        help="Changed-pixel ratio at/above which verdict is CHANGED (default: 0.01)")
+    ss_diff.add_argument("--tolerance", type=int, default=4,
+        help="Per-channel delta still counted as same (default: 4)")
+
+    # -- remix --
+    sp = sub.add_parser("remix",
+        help="RTX Remix runtime control: rtx.conf, presets, dev menu, logs",
+        description=(
+            "Control the RTX Remix runtime (dxvk-remix) in a game directory.\n"
+            "Durable settings go through rtx.conf (read at game launch); the\n"
+            "dev menu hotkey (default ALT+X) is available for live toggles.\n\n"
+            "Option catalog + compatibility playbook:\n"
+            "  .claude/references/remix-compat-catalog.md\n\n"
+            "Examples:\n"
+            "  python -m livetools remix status --game-dir C:/Games/MyGame\n"
+            "  python -m livetools remix conf set rtx.debugView.debugViewIdx 277 "
+            "--game-dir C:/Games/MyGame\n"
+            "  python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD "
+            "--game-dir C:/Games/MyGame\n"
+            "  python -m livetools remix preset apply debug-geometry-hash "
+            "--game-dir C:/Games/MyGame\n"
+            "  python -m livetools remix menu --exe game.exe\n"
+            "  python -m livetools remix log --game-dir C:/Games/MyGame --errors"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    rx_sub = sp.add_subparsers(dest="rx_action")
+
+    rx_status = rx_sub.add_parser("status",
+        help="Detect Remix runtime, list rtx.conf overrides and logs")
+    rx_status.add_argument("--game-dir", "-d", required=True,
+        help="Game directory containing d3d9.dll / rtx.conf")
+
+    rx_conf = rx_sub.add_parser("conf", help="Read or edit rtx.conf options")
+    rxc_sub = rx_conf.add_subparsers(dest="conf_action")
+
+    def _conf_leaf(name: str, help_text: str) -> argparse.ArgumentParser:
+        leaf = rxc_sub.add_parser(name, help=help_text)
+        leaf.add_argument("--game-dir", "-d", required=True,
+            help="Game directory containing rtx.conf")
+        leaf.add_argument("--no-backup", action="store_true",
+            help="Skip the timestamped rtx.conf backup before writing")
+        return leaf
+
+    rxc_get = _conf_leaf("get", "Print one option or all options")
+    rxc_get.add_argument("key", nargs="?", default=None,
+        help="Option name (omit to list all)")
+    rxc_set = _conf_leaf("set", "Set an option (idempotent)")
+    rxc_set.add_argument("key", help="Option name, e.g. rtx.fallbackLightMode")
+    rxc_set.add_argument("value", help="Value written verbatim")
+    rxc_unset = _conf_leaf("unset", "Remove an option")
+    rxc_unset.add_argument("key", help="Option name to remove")
+    rxc_add = _conf_leaf("add-hash",
+        "Append a hash to a hash-set option (e.g. rtx.uiTextures)")
+    rxc_add.add_argument("key", help="Hash-set option name")
+    rxc_add.add_argument("hash", help="Hash value, e.g. 0x1234ABCD")
+    rxc_rem = _conf_leaf("remove-hash",
+        "Remove a hash from a hash-set option")
+    rxc_rem.add_argument("key", help="Hash-set option name")
+    rxc_rem.add_argument("hash", help="Hash value to remove")
+
+    rx_preset = rx_sub.add_parser("preset",
+        help="List or apply named option bundles (debug views, hash rules, fallback light)")
+    rxp_sub = rx_preset.add_subparsers(dest="preset_action")
+    rxp_sub.add_parser("list", help="List available presets")
+    rxp_apply = rxp_sub.add_parser("apply", help="Apply a preset to rtx.conf")
+    rxp_apply.add_argument("name", help="Preset name (see 'preset list')")
+    rxp_apply.add_argument("--game-dir", "-d", required=True,
+        help="Game directory containing rtx.conf")
+    rxp_apply.add_argument("--no-backup", action="store_true",
+        help="Skip the timestamped rtx.conf backup before writing")
+
+    rx_menu = rx_sub.add_parser("menu",
+        help="Toggle the Remix developer menu (sends ALT+X chord)")
+    rx_menu.add_argument("--exe", "-e", default=None,
+        help="Target process exe name")
+    rx_menu.add_argument("--window", "-w", default=None,
+        help="Window title substring fallback")
+    rx_menu.add_argument("--chord", default="ALT+X",
+        help="Key chord to send (default: ALT+X, matches rtx.remixMenuKeyBinds)")
+
+    rx_log = rx_sub.add_parser("log",
+        help="Tail Remix/dxvk logs in the game directory")
+    rx_log.add_argument("--game-dir", "-d", required=True,
+        help="Game directory to scan for logs")
+    rx_log.add_argument("--tail", type=int, default=40,
+        help="Lines from the end of each log (default: 40)")
+    rx_log.add_argument("--errors", action="store_true",
+        help="Only lines containing err/warn")
+
+    rx_sub.add_parser("debugviews",
+        help="List known debug view indices (rtx.debugView.debugViewIdx values)")
 
     return p
 
@@ -1136,6 +1440,8 @@ def main() -> None:
         "memwatch": cmd_memwatch,
         "analyze": cmd_analyze,
         "gamectl": cmd_gamectl,
+        "screenshot": cmd_screenshot,
+        "remix": cmd_remix,
     }
 
     handler = dispatch.get(args.command)

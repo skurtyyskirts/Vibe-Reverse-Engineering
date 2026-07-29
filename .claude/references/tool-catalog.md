@@ -63,7 +63,12 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "What are the actual register values?" → `livetools trace --read` or `bp` + `regs`
 - "How many draw calls happen?" → `livetools dipcnt`
 - "Who writes to this memory address?" → `livetools memwatch`
-- "Send keys/clicks to the game window?" → `livetools gamectl`
+- "Send keys/clicks to the game window?" → `livetools gamectl` (chords via `key ALT+X` or `CHORD:ALT+X` token)
+- "What does the game look like right now?" → `livetools screenshot grab` (window → PNG; no Frida)
+- "Did the screen change / is the render flickering?" → `livetools screenshot diff` (changed-pixel ratio + bbox)
+- "Is Remix installed / what's in rtx.conf / what do the logs say?" → `livetools remix status` / `remix log` (no Frida)
+- "Change an RTX Remix setting (debug view, fallback light, hash rule, texture tags)?" → `livetools remix conf set|add-hash` or `remix preset apply` (see `.claude/references/remix-compat-catalog.md`)
+- "Open the Remix dev menu?" → `livetools remix menu` (ALT+X chord)
 
 ### DX analysis scripts (main agent, fast first-pass)
 
@@ -170,7 +175,7 @@ These are fast first-pass scanners — they surface candidate addresses. Follow 
 
 ## Dynamic Analysis (`livetools/`) -- Frida-based, attaches to running process
 
-Main-agent only (requires a live process; static-analyzer subagents must not use these). Canonical command reference with syntax, read-spec format, and recipes: the `/dynamic-analysis` skill (`.claude/skills/dynamic-analysis/SKILL.md`). Covers attach/spawn, breakpoints, trace/steptrace/collect, mem read/write/alloc, scan, disasm, modules, dipcnt, memwatch, vishook, gamectl, and offline `analyze`.
+Main-agent only (requires a live process; static-analyzer subagents must not use these). Canonical command reference with syntax, read-spec format, and recipes: the `/dynamic-analysis` skill (`.claude/skills/dynamic-analysis/SKILL.md`). Covers attach/spawn, breakpoints, trace/steptrace/collect, mem read/write/alloc, scan, disasm, modules, dipcnt, memwatch, vishook, gamectl, screenshot, remix (RTX Remix runtime control), and offline `analyze`. `gamectl`, `screenshot`, and `remix` need no attached process.
 
 **NOTE**: Some processes require their window to be focused for traces to capture data.
 
@@ -212,6 +217,7 @@ All analysis: `python -m graphics.directx.dx9.tracer analyze <JSONL> [OPTIONS]`
 | `--const-provenance` | Compact: for each draw, show which seq# set each named constant |
 | `--const-provenance-draw N` | Detailed: all register values and sources for draw #N |
 | `--classify-draws` | Auto-tag draws (alpha, ztest, fog, fullscreen-quad, etc.) with draw method and vertex shader breakdown |
+| `--hash-stability` | Flag draws whose RTX Remix geometry hashes will churn (UP draws, dynamic VBs, pretransformed, shader draws) + cross-frame flicker/buffer-churn diff + rtx.conf fix recommendations |
 | `--vtx-formats` | Group draws by vertex declaration with element breakdown |
 | `--redundant` | Find redundant state-set calls (same value set twice before a draw) |
 | `--texture-freq` | Texture binding frequency across all draws |

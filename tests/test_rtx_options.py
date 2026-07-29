@@ -173,8 +173,18 @@ def test_hash_sets_accept_comma_separated_hashes(typed):
 
 
 def test_hash_sets_reject_non_hex(typed):
-    problem = rtx_options.validate_value("rtx.uiTextures", "0xA1B2, notahash")
+    problem = rtx_options.validate_value(
+        "rtx.uiTextures", "0xA1B2C3D4, notahash")
     assert "notahash" in problem
+
+
+def test_hash_sets_reject_a_truncated_hash(typed):
+    # Nothing shorter than the capture extractor's own threshold could have
+    # come from a capture, so it is a typo rather than a short hash.
+    problem = rtx_options.validate_value("rtx.uiTextures", "0x1")
+    assert problem and str(rtx_options.MIN_HASH_DIGITS) in problem
+    assert rtx_options.validate_value(
+        "rtx.uiTextures", "0xA1B2C3D4E5F60718") is None
 
 
 def test_free_form_types_are_not_second_guessed(typed):

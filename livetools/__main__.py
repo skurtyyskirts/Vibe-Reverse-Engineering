@@ -904,7 +904,7 @@ def cmd_proc(args: argparse.Namespace) -> int:
 
 # ── remix command ─────────────────────────────────────────────────────────
 
-def cmd_remix(args: argparse.Namespace) -> None:
+def cmd_remix(args: argparse.Namespace) -> int:
     from . import remixctl as rx
     action = getattr(args, "rx_action", None)
 
@@ -936,8 +936,12 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 print(f"  {lg['name']:<32s} {lg['size']:>10d} B  {lg['mtime']}")
 
     elif action == "conf":
-        conf = rx.conf_path(args.game_dir, args.surface)
         sub = args.conf_action
+        if not sub:
+            print("Usage: python -m livetools remix conf "
+                  "[get|set|unset|add-hash|remove-hash]")
+            return 2
+        conf = rx.conf_path(args.game_dir, args.surface)
         if sub == "get":
             options = rx.load_conf(conf)
             if args.key:
@@ -1015,6 +1019,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
         else:
             print("Usage: python -m livetools remix conf "
                   "[get|set|unset|add-hash|remove-hash]")
+            return 2
 
     elif action == "preset":
         sub = args.preset_action
@@ -1027,7 +1032,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
             if args.name not in rx.PRESETS:
                 print(f"[error] Unknown preset '{args.name}'. "
                       f"Available: {', '.join(sorted(rx.PRESETS))}")
-                return
+                return EXIT_FAILED
             applied = rx.apply_preset(args.game_dir, args.name,
                                       backup=not args.no_backup,
                                       backup_dir=args.backup_dir)
@@ -1039,16 +1044,22 @@ def cmd_remix(args: argparse.Namespace) -> None:
             print("  (takes effect on next game launch)")
         else:
             print("Usage: python -m livetools remix preset [list|apply]")
+            return 2
 
     elif action == "menu":
-        r = rx.toggle_menu(getattr(args, "exe", None),
-                           getattr(args, "window", None),
-                           chord=args.chord)
+        try:
+            r = rx.toggle_menu(getattr(args, "exe", None),
+                               getattr(args, "window", None),
+                               chord=args.chord)
+        except OSError as e:
+            print(f"[error] {e}")
+            return EXIT_FAILED
         if r.get("ok"):
             print(f"Sent {r['combo']} (focused={r.get('focused')}). "
                   "Screenshot to verify the menu state.")
         else:
             print(f"[error] {r.get('error', '?')}")
+            return EXIT_FAILED
 
     elif action == "log":
         logs = rx.read_logs(args.game_dir, tail=args.tail,
@@ -1071,9 +1082,14 @@ def cmd_remix(args: argparse.Namespace) -> None:
                                       time.localtime(c["mtime"]))
                 print(f"  {c['name']:<48s} {c['size']:>12d} B  {stamp}")
         elif sub == "trigger":
-            r = rx.trigger_capture(args.game_dir, exe=getattr(args, "exe", None),
-                                   window=getattr(args, "window", None),
-                                   chord=args.chord, timeout=args.timeout)
+            try:
+                r = rx.trigger_capture(args.game_dir,
+                                       exe=getattr(args, "exe", None),
+                                       window=getattr(args, "window", None),
+                                       chord=args.chord, timeout=args.timeout)
+            except OSError as e:
+                print(f"[error] {e}")
+                return EXIT_FAILED
             if r.get("ok"):
                 print(f"Captured {r['capture']['name']} "
                       f"({r['capture']['size']} B) via {r['chord']}")
@@ -1082,6 +1098,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
                       f"-d {args.game_dir}")
             else:
                 print(f"[error] {r.get('error', '?')}")
+                return EXIT_NEGATIVE
         elif sub == "assets":
             found = rx.capture_assets(args.game_dir)
             print(f"Capture root: {found['root']}")
@@ -1099,6 +1116,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
         else:
             print("Usage: python -m livetools remix capture "
                   "[list|trigger|assets]")
+            return 2
 
     elif action == "options":
         from . import rtx_options as ro
@@ -1129,7 +1147,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 print(f"\n{entry['description']}")
         elif sub == "sync":
             try:
-                count = ro.sync(args.source)
+                count = ro.sync(args.source or ro.RTX_OPTIONS_URL)
             except (OSError, ValueError) as e:
                 print(f"[error] option sync failed: {e}")
                 return EXIT_FAILED
@@ -1137,6 +1155,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
         else:
             print("Usage: python -m livetools remix options "
                   "[search|show|sync]")
+            return 2
 
     elif action == "debugviews":
         from .remixctl import DEBUG_VIEWS
@@ -1146,6 +1165,8 @@ def cmd_remix(args: argparse.Namespace) -> None:
     else:
         print("Usage: python -m livetools remix "
               "[status|conf|preset|menu|log|capture|options|debugviews]")
+        return 2
+    return 0
 
 
 # ── argument parser ────────────────────────────────────────────────────────
@@ -1900,8 +1921,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 # ── main ───────────────────────────────────────────────────────────────────
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Dispatch a subcommand.
+
+    Args:
+        argv: Argument list; defaults to sys.argv[1:].
 
     Returns:
         The handler's exit code. Handlers that report a failure return
@@ -1913,7 +1937,7 @@ def main() -> int:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command is None:
         parser.print_help()

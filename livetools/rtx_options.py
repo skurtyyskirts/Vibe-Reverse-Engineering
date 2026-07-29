@@ -34,6 +34,12 @@ DATA_FILE = Path(__file__).parent / "data" / "rtx_options.tsv"
 RTX_OPTIONS_URL = ("https://raw.githubusercontent.com/NVIDIAGameWorks/"
                    "dxvk-remix/main/RtxOptions.md")
 
+#: Shortest run of hex digits accepted as a Remix asset hash. Matches the
+#: threshold `remixctl` uses when reading hashes out of a capture, so a value
+#: that could never have come from one is rejected rather than written.
+MIN_HASH_DIGITS = 8
+
+
 _FIELDS = ("name", "type", "default", "min", "max", "description")
 _cache: dict[str, dict] | None = None
 
@@ -125,7 +131,8 @@ def validate_value(name: str, value: str) -> str | None:
     if kind == "hash set":
         for item in (h.strip() for h in text.split(",") if h.strip()):
             if not _is_hash(item):
-                return (f"expects comma-separated 0x hashes, got {item!r} — "
+                return (f"expects comma-separated 0x hashes of at least "
+                        f"{MIN_HASH_DIGITS} hex digits, got {item!r} — "
                         "hashes come from `remix capture assets`")
         return None
 
@@ -145,7 +152,8 @@ def validate_value(name: str, value: str) -> str | None:
 
 def _is_hash(text: str) -> bool:
     body = text[2:] if text[:2].lower() == "0x" else text
-    return bool(body) and all(c in "0123456789abcdefABCDEF" for c in body)
+    return (len(body) >= MIN_HASH_DIGITS
+            and all(c in "0123456789abcdefABCDEF" for c in body))
 
 
 def search(term: str, limit: int = 20) -> list[dict]:

@@ -265,3 +265,12 @@ def test_a_signature_without_a_parameter_list_is_refused(tmp_path):
     assert line_problem("@ 0x401000 int;")
     with pytest.raises(ValueError):
         add_entries(tmp_path / "kb.h", functions=[(0x401000, "int")])
+
+
+def test_validate_also_reports_entries_that_parse_into_something_unusable(tmp_path):
+    # This line parses: the parser takes "int" as the function name and hands
+    # it to the backends. validate is stricter than the parser on purpose.
+    kb = tmp_path / "kb.h"
+    kb.write_text("@ 0x401000 int;\n")
+    assert parse_kb(kb).functions[0].name == "int"
+    assert len(validate(kb)) == 1

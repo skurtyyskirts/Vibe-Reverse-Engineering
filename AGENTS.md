@@ -66,7 +66,7 @@ $ 0x7C5548 Object* g_mainObject
 
 Update the KB when you: identify a function's purpose, reconstruct a struct, identify a global, find magic constants (define an enum), or resolve RTTI class names. This includes findings from **live** tools — a trace or breakpoint that proves what a function does ends with the function in kb.h, not in a chat message. Always pass `--types patches/<project>/kb.h` to the decompiler once a KB exists.
 
-Write entries with the KB tool rather than by hand; it keeps one entry per address, refuses lines the parser would silently drop, and `validate` finds any that already slipped in:
+Write entries with the KB tool rather than by hand; it keeps one entry per address, refuses lines that would not become usable entries, and `validate` finds any that already slipped in:
 
 ```bash
 python -m retools.kb add patches/MyGame/kb.h \

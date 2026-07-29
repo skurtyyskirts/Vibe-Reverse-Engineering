@@ -13,7 +13,9 @@ that proves what a function does should end with the function in kb.h, not in
 a chat message.
 
 Parsing skips lines it cannot read, so a malformed entry is invisible rather
-than loud. ``validate`` reports exactly which lines were dropped and why.
+than loud. ``validate`` is the lint for that: it reports every line that is not
+a usable entry — both the ones ``parse_kb`` discards outright and the ones that
+parse into something the backends cannot use.
 
 Usage (CLI):
     python -m retools.kb validate patches/MyGame/kb.h
@@ -132,7 +134,13 @@ def read_existing_addresses(path: str | Path) -> set[int]:
 # ── Validation ─────────────────────────────────────────────────────────────
 
 def line_problem(line: str) -> str | None:
-    """Explain why ``parse_kb`` would drop a line, or None if it parses.
+    """Explain why a line is not a usable kb.h entry, or None if it is fine.
+
+    Stricter than ``parse_kb``, deliberately. The parser discards most
+    malformed lines, but a few parse into an entry that is wrong rather than
+    absent — a function signature with no parameter list yields a "name" taken
+    from its return type, which then reaches r2 and Ghidra as a command
+    argument. Both cases are reported here so neither reaches the KB.
 
     Args:
         line: One raw line from a kb.h file.
@@ -158,7 +166,9 @@ def line_problem(line: str) -> str | None:
             return f"'{parts[0]}' is not a hex address"
         signature = parts[1].rstrip(";").strip()
         if "(" not in signature:
-            return "function entry needs a parameter list, e.g. 'void Foo(int)'"
+            return ("function entry needs a parameter list, e.g. "
+                    "'void Foo(int)' — this parses, but names the function "
+                    "after its return type")
         if not extract_function_name(signature):
             return "signature has no recognizable function name"
         return None
@@ -175,7 +185,7 @@ def line_problem(line: str) -> str | None:
 
 
 def validate(path: str | Path) -> list[tuple[int, str, str]]:
-    """Find every line a kb.h parse would silently discard.
+    """Find every line in a kb.h file that is not a usable entry.
 
     Returns:
         List of (line_number, line_text, problem).
@@ -291,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     show.add_argument("path")
 
     check = sub.add_parser("validate",
-        help="Report lines a kb.h parse would silently drop")
+        help="Report lines that are not usable entries (dropped or malformed)")
     check.add_argument("path")
 
     add = sub.add_parser("add", help="Add or update entries")
@@ -328,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         for number, line, problem in problems:
             print(f"{path}:{number}: {problem}\n    {line}")
         if problems:
-            print(f"{len(problems)} line(s) would be dropped silently")
+            print(f"{len(problems)} line(s) will not become usable entries")
             return 1
         print(f"{path}: all lines parse")
         return 0

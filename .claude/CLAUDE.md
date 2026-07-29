@@ -43,3 +43,4 @@ Invoke the **`autonomous-remix-port` skill** when asked to port or reverse engin
 - **Frida-based dynamic analysis**: `/dynamic-analysis` skill
 - **Autonomous RTX Remix porting**: `.claude/skills/autonomous-remix-port/SKILL.md` (invoke `autonomous-remix-port` skill, not auto-loaded)
 - **RTX Remix rtx.conf options + symptom→fix playbook**: `.claude/references/remix-compat-catalog.md` (read on demand, not auto-loaded)
+- **External tools worth adding to the toolset**: `.claude/references/toolset-recommendations.md` (read on demand, not auto-loaded)

@@ -17,7 +17,7 @@ Run all tools from repo root via `python -m <module>`. **ALWAYS pass `--types pa
 - `python -m retools.readmem $B $VA $TYPE` — read typed PE data
 - `python -m retools.dataflow $B $VA --constants` — forward constant propagation
 - `python -m retools.dataflow $B $VA --slice TARGET_VA:REG` — backward register slice
-- `python -m retools.asi_patcher build spec.json` — build ASI patch DLL
+- `python -m retools.asi_patcher show|init` — inspect or scaffold a patch spec
 - `python retools/pyghidra_backend.py status $B --project $P` — Ghidra project existence check
 - `python -m retools.index status <Game> [--db PATH]` — per-table row counts + schema_version for the game's index.db
 - `python -m retools.kb add|validate|show patches/<Game>/kb.h` — write confirmed findings back into the KB, or find lines that will not become usable entries
@@ -27,6 +27,7 @@ Run all tools from repo root via `python -m <module>`. **ALWAYS pass `--types pa
 
 Everything else in `retools`. Tell it WHAT you need, not HOW. D3D9-specific questions — try DX scripts first (faster).
 
+- `asi_patcher build` — shells out to MSVC and needs `--vcvarsall`; minutes, not seconds
 - Decompile / callgraph / xrefs / string search / datarefs / structrefs / RTTI / throwmap / dumpinfo — check `index status` / `query` first; only fall back to these scanners when index.db lacks the answer
 - Bootstrap new binary (2-5 min) / pyghidra analyze (5-15 min) / bulk sigdb scan (1-3 min)
 - `pyghidra_backend.py export` (seed index.db from a Ghidra project) / `kb-apply` (push kb.h into the Ghidra project)

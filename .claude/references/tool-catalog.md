@@ -25,7 +25,7 @@ These are fast (<5s) and allowed inline:
 - "Read a typed value from the PE file" → `python -m retools.readmem $B $VA $TYPE`
 - "What constant flows into this register?" → `python -m retools.dataflow $B $VA --constants`
 - "Trace where this value comes from" → `python -m retools.dataflow $B $VA --slice TARGET_VA:REG`
-- "Build an ASI patch DLL" → `python -m retools.asi_patcher build spec.json`
+- "Inspect or scaffold an ASI patch spec" → `python -m retools.asi_patcher show|init`
 - "Does a Ghidra project exist for this binary?" → `python retools/pyghidra_backend.py status $B --project $P`
 - "What's in this game's index?" → `python -m retools.index status <Game> [--db PATH]`
 - "Query facts already indexed (funcs, names, xrefs, strings, imports, callers/callees)" → `python -m retools.query <Game> "SQL" [--db PATH] [--json] [--list-tables] [--schema TABLE]`
@@ -52,6 +52,7 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "What crashed and what was the error message?" → dump diagnosis + throwmap
 - "Map all throw sites to error strings" → throwmap list
 - "First time analyzing a binary?" → bootstrap (2-5 min) + pyghidra analyze (5-15 min) in parallel
+- "Build an ASI patch DLL" → `asi_patcher build spec.json --vcvarsall <path>` (invokes MSVC; not inline-fast)
 - "Bulk signature scan" → sigdb scan (1-3 min)
 - "Seed/refresh the index from a Ghidra project" → `pyghidra_backend.py export` (funcs/names/xrefs/blocks, source='ghidra', authoritative over provisional bootstrap rows)
 - "Push kb.h names/prototypes into the Ghidra project" → `pyghidra_backend.py kb-apply` (idempotent)

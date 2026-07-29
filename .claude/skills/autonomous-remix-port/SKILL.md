@@ -30,6 +30,13 @@ Never chain blind inputs. Never claim a render state you have not screenshotted.
    input — `remix preset apply menu-input-force -d <GAMEDIR>`.
 4. Overnight runs: start `python -m livetools proc keep-awake --duration 43200`
    in the background. A slept machine stops delivering input and captures black.
+5. The session must stay unlocked on a real console. `keep-awake` covers the
+   screensaver and display sleep; it cannot stop Win+L or a policy lock, and
+   `gamectl` takes the foreground, so the machine cannot be used for anything
+   else during the run. Log in at the physical console with autologon rather
+   than over RDP (or `tscon` the session back before disconnecting); headless
+   boxes need a dummy EDID dongle. `livetools health` reports `session-locked`
+   when this is wrong, instead of a night of phantom rendering diagnosis.
 
 ## Durable State
 
@@ -132,8 +139,17 @@ spawn `static-analyzer` subagents for `bootstrap.py` and
 `pyghidra_backend.py analyze` (see subagent-workflow.md), then
 `pyghidra_backend.py export` to seed `index.db` so later questions are
 `retools.query` SQL instead of fresh scans. Also queue DX scans:
-`classify_draws.py`, `find_vs_constants.py`, `find_skinning.py`,
-`find_render_states.py`, `decode_vtx_decls.py`.
+the full first-pass sweep, which is one background cost overlapping Phases
+2-3: `find_d3d_calls`, `find_device_calls`, `classify_draws`,
+`find_vs_constants`, `find_ps_constants`, `decode_vtx_decls --scan`,
+`decode_fvf`, `find_skinning`, `find_blend_states`, `find_render_states`,
+`find_texture_ops`, `find_transforms`, `find_surface_formats`,
+`find_stateblocks`, `find_matrix_registers`.
+
+`find_stateblocks` earns its place early: a game that saves and restores
+through state blocks silently reverts render states the loop sets, which
+presents as a fix that did not take.
+
 Don't block on results — continue to Phase 2.
 
 ### Phase 2 — Launch and see
@@ -166,7 +182,11 @@ Goal: a repeatable in-level viewpoint (menus don't exercise the 3D pipeline).
    input by input every single time.
 5. In-level test: 3D scene in the screenshot (`screenshot stats` shows high
    `color_count` and `edge_density`) plus `livetools dipcnt` or a 2-frame
-   dx9tracer capture showing hundreds of draws.
+   dx9tracer capture showing hundreds of draws. `screenshot stats` alone is
+   not enough — a pre-rendered menu scores like a 3D scene, and everything
+   downstream would then tune hashes on a menu. If neither draw-count route
+   is available, the phase is **blocked, not done**:
+   `python -m autonomy phase MyGame --set 3 blocked --note "no draw-count evidence"`.
 
 Games needing held keys or timing use `HOLD:KEY:ms` / `WAIT:ms` tokens;
 Remix's own hotkeys pass through `CHORD:` tokens.
@@ -203,7 +223,10 @@ python -m graphics.directx.dx9.tracer analyze <GAMEDIR>/dxtrace_frame.jsonl \
 The tracer is itself a `d3d9.dll` proxy — it cannot sit in the same slot as the
 Remix runtime. Capture traces in a **copy of the game directory without the
 Remix runtime**, or with Remix temporarily moved aside; note which in the
-journal. Delegate heavy analysis passes to `static-analyzer`.
+journal. Delegate one batch to `static-analyzer` over the same JSONL —
+`--render-passes --texture-freq --rt-graph --transform-calls --vtx-formats`
+alongside the flags above — persisted to `patches/<Game>/findings.md`, so
+Phase 7 reads evidence instead of capturing again.
 
 Then the live flicker test. **Measure the noise floor first** — a renderer is
 never bit-identical frame to frame (dithering, temporal accumulation, upscaler
@@ -272,7 +295,10 @@ Then work the symptom table in `remix-compat-catalog.md` until the normal
 render looks right. For each symptom: screenshot evidence → apply the mapped
 fix → restart → macro back in-level → screenshot → compare. Standard sequence:
 1. Lighting present? (black scene → fallback light diagnosis pattern)
-2. Sky correct? (`rtx.skyBoxTextures` / thresholds)
+2. Sky correct? Cheapest first: `remix preset apply sky-autodetect` (camera
+   heuristic, no hashes needed) → `rtx.skyDrawcallIdThreshold` /
+   `rtx.skyMinZThreshold` → only then `rtx.skyBoxTextures` from a capture,
+   which costs a capture plus a vision pass per candidate
 3. UI clean? (`rtx.uiTextures` complete)
 4. Geometry culled out of reflections? (`remix preset apply anticulling-on`)
 5. No double lighting (lightmaps), no ghost/flicker (`uniqueObjectDistance`),

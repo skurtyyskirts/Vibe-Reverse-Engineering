@@ -69,6 +69,26 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "Is Remix installed / what's in rtx.conf / what do the logs say?" → `livetools remix status` / `remix log` (no Frida)
 - "Change an RTX Remix setting (debug view, fallback light, hash rule, texture tags)?" → `livetools remix conf set|add-hash` or `remix preset apply` (see `.claude/references/remix-compat-catalog.md`)
 - "Open the Remix dev menu?" → `livetools remix menu` (ALT+X chord)
+- "Is this frame usable, or is the capture black?" → `livetools screenshot stats` / the verdict `grab` prints (exit 3 = unusable)
+- "Where on screen did it change — HUD or world?" → `livetools screenshot diff --tiles 4x3`
+- "Is the game alive / crashed / hung / frozen?" → `livetools health --exe game.exe` (exit 3 = not ok)
+- "Restart the game to apply an rtx.conf change" → `livetools proc restart <exe_path>` (stops every instance, relaunches, waits for the window)
+- "Keep an overnight run from being slept by Windows" → `livetools proc keep-awake --duration 43200` (background)
+- "What texture hashes exist so I can tag UI/sky/decals?" → `livetools remix capture trigger` then `remix capture assets` (no dev menu needed)
+- "Which rtx.conf option does X?" → `livetools remix options search <term>` (all ~1000 options, offline)
+- "Save a menu path that worked" → `livetools gamectl macro-save <name> --steps "..."`
+
+### Autonomous run state (`python -m autonomy`, main agent)
+
+Durable state for unattended porting runs — phases with evidence gates, attempt
+budgets that stop infinite retries, journal, screenshot numbering, watchdog
+recovery. Full loop: the `autonomous-remix-port` skill.
+
+- "Start / resume an unattended port" → `autonomy init` / `autonomy status`
+- "Record what this iteration did" → `autonomy step --action ... --key ... --outcome ok|fail` (**exit 3 = key exhausted, change approach**)
+- "Is the game still up? put it back if not" → `autonomy watchdog <Game>` (exit 3 = crash loop)
+- "Mark a phase passed" → `autonomy phase <Game> --complete N --gate <evidence>` (evidence required)
+- "Write the final report" → `autonomy finish` + `autonomy report --out patches/<Game>/findings.md`
 
 ### DX analysis scripts (main agent, fast first-pass)
 
@@ -178,6 +198,15 @@ These are fast first-pass scanners — they surface candidate addresses. Follow 
 Main-agent only (requires a live process; static-analyzer subagents must not use these). Canonical command reference with syntax, read-spec format, and recipes: the `/dynamic-analysis` skill (`.claude/skills/dynamic-analysis/SKILL.md`). Covers attach/spawn, breakpoints, trace/steptrace/collect, mem read/write/alloc, scan, disasm, modules, dipcnt, memwatch, vishook, gamectl, screenshot, remix (RTX Remix runtime control), and offline `analyze`. `gamectl`, `screenshot`, and `remix` need no attached process.
 
 **NOTE**: Some processes require their window to be focused for traces to capture data.
+
+**Exit codes**: `health`, `proc`, `screenshot`, `remix` and `gamectl` return 0
+on success, 1 when the command failed, and 3 when the command ran and the
+answer was negative (game unhealthy, frame black, nothing changed). Branch on
+these rather than parsing stdout.
+
+**Non-Frida subcommands** — `gamectl`, `screenshot`, `health`, `proc` and
+`remix` drive the game and its runtime without attaching, so they work
+alongside Remix (which occupies the `d3d9.dll` slot the tracer also wants).
 
 ## D3D9 Frame Trace (`graphics/directx/dx9/tracer/`) -- full-frame API capture and analysis
 

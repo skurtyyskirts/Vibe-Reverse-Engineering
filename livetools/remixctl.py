@@ -22,11 +22,14 @@ Usage (CLI):
     python -m livetools remix preset apply debug-geometry-hash --game-dir DIR
     python -m livetools remix menu --exe game.exe
     python -m livetools remix log --game-dir DIR --errors --tail 40
+    python -m livetools remix capture trigger --game-dir DIR --exe game.exe
+    python -m livetools remix capture assets --game-dir DIR
 
 Usage (library):
     from livetools import remixctl
     remixctl.set_option(conf_path, "rtx.fallbackLightMode", "2")
     remixctl.apply_preset(conf_path, "debug-geometry-hash")
+    remixctl.capture_assets(game_dir)["assets"]["texture"]
 """
 
 from __future__ import annotations
@@ -152,6 +155,62 @@ PRESETS: dict[str, dict] = {
             "rtx.useVertexCapturedNormals": "True",
         },
     },
+    "automation": {
+        "description": "Remix's own unattended-run settings: no blocking "
+                       "dialogs, no per-frame memory readout in the image "
+                       "(which would make every screenshot diff non-zero), no "
+                       "asset-loading error popups. Apply this first on any "
+                       "autonomous run.",
+        "options": {
+            "rtx.automation.disableBlockingDialogBoxes": "True",
+            "rtx.automation.disableDisplayMemoryStatistics": "True",
+            "rtx.automation.suppressAssetLoadingErrors": "True",
+        },
+    },
+    "sky-autodetect": {
+        "description": "Tag sky draws by camera heuristics instead of by "
+                       "hash — the one sky mechanism that needs no human "
+                       "classifying textures. Try before rtx.skyBoxTextures.",
+        "options": {
+            "rtx.skyAutoDetect": "2",
+            "rtx.skyForceAutoDetectedToReproject": "True",
+        },
+    },
+    "capture-ready": {
+        "description": "Make the capture hotkey (CTRL+SHFT+Q) write a USD "
+                       "capture immediately instead of opening the capture "
+                       "menu — the unattended source of asset hashes.",
+        "options": {
+            "rtx.captureShowMenuOnHotkey": "False",
+            "rtx.captureInstances": "True",
+        },
+    },
+    "keep-textures": {
+        "description": "Keep every texture resident so short-lived ones "
+                       "(loading screens, one-frame HUD elements) still show "
+                       "up for tagging. Costs VRAM — development only.",
+        "options": {
+            "rtx.keepTexturesForTagging": "True",
+        },
+    },
+    "anticulling-on": {
+        "description": "Keep game-culled objects and lights in the ray "
+                       "tracing scene so reflections and shadows include "
+                       "geometry the game frustum-culled.",
+        "options": {
+            "rtx.antiCulling.object.enable": "True",
+            "rtx.antiCulling.object.numObjectsToKeep": "10000",
+            "rtx.antiCulling.light.enable": "True",
+            "rtx.antiCulling.light.numFramesToExtendLightLifetime": "1000",
+        },
+    },
+    "anticulling-off": {
+        "description": "Disable anti-culling (restore runtime defaults)",
+        "options": {
+            "rtx.antiCulling.object.enable": "False",
+            "rtx.antiCulling.light.enable": "False",
+        },
+    },
 }
 
 
@@ -183,21 +242,31 @@ def load_conf(path: str | Path) -> dict[str, str]:
     return parse_conf(p.read_text(encoding="utf-8", errors="replace"))
 
 
-def _backup(path: Path) -> Path | None:
+#: rtx.conf backups land here, relative to the game directory, unless the
+#: caller names somewhere better. An autonomous run rewrites rtx.conf dozens
+#: of times per session; scattering that many .bak siblings through the game
+#: root buries the game's own files.
+BACKUP_SUBDIR = "rtx-remix-backups"
+
+
+def _backup(path: Path, backup_dir: str | Path | None = None) -> Path | None:
     if not path.is_file():
         return None
+    folder = Path(backup_dir) if backup_dir else path.parent / BACKUP_SUBDIR
+    folder.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    bak = path.with_name(f"{path.name}.{stamp}.bak")
+    bak = folder / f"{path.name}.{stamp}.bak"
     n = 2
     while bak.exists():
-        bak = path.with_name(f"{path.name}.{stamp}-{n}.bak")
+        bak = folder / f"{path.name}.{stamp}-{n}.bak"
         n += 1
     shutil.copy2(path, bak)
     return bak
 
 
 def set_option(path: str | Path, key: str, value: str,
-               backup: bool = True) -> Path | None:
+               backup: bool = True,
+               backup_dir: str | Path | None = None) -> Path | None:
     """Set (or replace) one option in rtx.conf, preserving all other lines.
 
     The existing assignment line is rewritten in place if present (first
@@ -208,13 +277,16 @@ def set_option(path: str | Path, key: str, value: str,
         path:   rtx.conf path (created if missing).
         key:    Option name, e.g. "rtx.fallbackLightMode".
         value:  Value string written verbatim after "= ".
-        backup: Write a timestamped .bak sibling before modifying.
+        backup: Write a timestamped backup before modifying.
+        backup_dir: Where that backup goes. Defaults to a BACKUP_SUBDIR folder
+            in the game directory; pass the project workspace's `backups/` to
+            keep run history with the rest of the project.
 
     Returns:
         Backup path if one was created, else None.
     """
     p = Path(path)
-    bak = _backup(p) if backup else None
+    bak = _backup(p, backup_dir) if backup else None
     lines = (p.read_text(encoding="utf-8", errors="replace").splitlines()
              if p.is_file() else [])
     new_line = f"{key} = {value}"
@@ -235,13 +307,14 @@ def set_option(path: str | Path, key: str, value: str,
     return bak
 
 
-def unset_option(path: str | Path, key: str, backup: bool = True) -> bool:
+def unset_option(path: str | Path, key: str, backup: bool = True,
+                 backup_dir: str | Path | None = None) -> bool:
     """Remove an option from rtx.conf. Returns True if it was present."""
     p = Path(path)
     if not p.is_file():
         return False
     if backup:
-        _backup(p)
+        _backup(p, backup_dir)
     lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     out = []
     removed = False
@@ -262,7 +335,8 @@ def _parse_hash_list(value: str) -> list[str]:
 
 
 def add_hash(path: str | Path, key: str, hash_value: str,
-             backup: bool = True) -> list[str]:
+             backup: bool = True,
+             backup_dir: str | Path | None = None) -> list[str]:
     """Append a hash to a hash-set option (deduplicated, order preserved).
 
     Returns:
@@ -272,24 +346,28 @@ def add_hash(path: str | Path, key: str, hash_value: str,
     normalized = hash_value.strip()
     if normalized.lower() not in (h.lower() for h in current):
         current.append(normalized)
-        set_option(path, key, ", ".join(current), backup=backup)
+        set_option(path, key, ", ".join(current), backup=backup,
+                   backup_dir=backup_dir)
     return current
 
 
 def remove_hash(path: str | Path, key: str, hash_value: str,
-                backup: bool = True) -> list[str]:
+                backup: bool = True,
+                backup_dir: str | Path | None = None) -> list[str]:
     """Remove a hash from a hash-set option. Returns the resulting list."""
     current = _parse_hash_list(load_conf(path).get(key, ""))
     kept = [h for h in current if h.lower() != hash_value.strip().lower()]
     if len(kept) != len(current):
         if kept:
-            set_option(path, key, ", ".join(kept), backup=backup)
+            set_option(path, key, ", ".join(kept), backup=backup,
+                       backup_dir=backup_dir)
         else:
-            unset_option(path, key, backup=backup)
+            unset_option(path, key, backup=backup, backup_dir=backup_dir)
     return kept
 
 
-def apply_preset(path: str | Path, name: str, backup: bool = True) -> dict:
+def apply_preset(path: str | Path, name: str, backup: bool = True,
+                 backup_dir: str | Path | None = None) -> dict:
     """Apply a named preset's options to rtx.conf.
 
     Returns:
@@ -301,7 +379,8 @@ def apply_preset(path: str | Path, name: str, backup: bool = True) -> dict:
     preset = PRESETS[name]
     first = True
     for key, value in preset["options"].items():
-        set_option(path, key, value, backup=backup and first)
+        set_option(path, key, value, backup=backup and first,
+                   backup_dir=backup_dir)
         first = False
     return preset["options"]
 
@@ -417,3 +496,154 @@ def toggle_menu(exe: str | None = None, window: str | None = None,
     result = gc.send_chord(chord)
     result["focused"] = focused
     return result
+
+
+# ── USD captures ───────────────────────────────────────────────────────────
+
+# Remix writes captures under <game_dir>/rtx-remix/captures, with assets
+# exported into sibling folders named for their category.
+CAPTURE_SUBDIR = Path("rtx-remix") / "captures"
+CAPTURE_CHORD = "CTRL+SHFT+Q"
+
+#: Asset folder name -> the rtx.conf hash space its filenames belong to.
+CAPTURE_ASSET_DIRS = {
+    "textures": "texture", "materials": "material", "meshes": "mesh",
+    "lights": "light", "thumbs": "thumbnail",
+}
+
+_HASH_CHARS = set("0123456789abcdefABCDEF")
+
+
+def capture_root(game_dir: str | Path) -> Path:
+    """Path to a game's capture output directory (may not exist yet)."""
+    return Path(game_dir) / CAPTURE_SUBDIR
+
+
+def list_captures(game_dir: str | Path) -> list[dict]:
+    """List USD captures in a game directory, newest last.
+
+    Returns:
+        List of {name, path, mtime, size} for each captured stage file.
+    """
+    root = capture_root(game_dir)
+    if not root.is_dir():
+        return []
+    stages = [f for f in root.iterdir()
+              if f.is_file() and f.suffix.lower() in (".usd", ".usda", ".usdc")]
+    return [{"name": f.name, "path": str(f), "size": f.stat().st_size,
+             "mtime": f.stat().st_mtime}
+            for f in sorted(stages, key=lambda f: f.stat().st_mtime)]
+
+
+def newest_capture(game_dir: str | Path) -> dict | None:
+    """Most recently written capture, or None if there are none."""
+    captures = list_captures(game_dir)
+    return captures[-1] if captures else None
+
+
+def _hash_from_name(stem: str) -> str | None:
+    """Extract the hash from a capture asset filename.
+
+    Capture assets are written as `<hash><suffix>.<ext>`, so the leading run
+    of hex characters is the hash. Anything shorter than 8 digits is a
+    generated name (thumbnails, sky probes), not an asset identity.
+    """
+    run = ""
+    for ch in stem:
+        if ch in _HASH_CHARS:
+            run += ch
+        else:
+            break
+    return run.upper() if len(run) >= 8 else None
+
+
+def capture_assets(game_dir: str | Path) -> dict:
+    """Collect every asset hash the Remix runtime exported into captures.
+
+    This is the unattended path to the hashes that `rtx.uiTextures`,
+    `rtx.skyBoxTextures` and the other hash-set options need. The developer
+    menu shows the same hashes, but only to a human clicking through the
+    texture tabs; the capture writes them to disk where a script can read
+    them, each next to the exported image it identifies.
+
+    Args:
+        game_dir: Game directory containing `rtx-remix/captures`.
+
+    Returns:
+        dict with:
+            root:     the capture directory
+            captures: `list_captures` result
+            assets:   {category: [{hash, file}]} for each populated asset dir
+            counts:   {category: n}
+
+    Tagging a hash from here still needs verification — confirm the tag took
+    with a debug view or by re-capturing after the restart.
+    """
+    root = capture_root(game_dir)
+    assets: dict[str, list[dict]] = {}
+    for dirname, category in CAPTURE_ASSET_DIRS.items():
+        folder = root / dirname
+        if not folder.is_dir():
+            continue
+        entries = []
+        for f in sorted(folder.iterdir()):
+            if not f.is_file():
+                continue
+            digest = _hash_from_name(f.stem)
+            if digest:
+                entries.append({"hash": f"0x{digest}", "file": str(f)})
+        if entries:
+            assets[category] = entries
+    return {"root": str(root), "captures": list_captures(game_dir),
+            "assets": assets,
+            "counts": {k: len(v) for k, v in assets.items()}}
+
+
+def trigger_capture(game_dir: str | Path, exe: str | None = None,
+                    window: str | None = None, chord: str = CAPTURE_CHORD,
+                    timeout: float = 30.0) -> dict:
+    """Take a USD capture and wait for the runtime to finish writing it.
+
+    Sending the hotkey is not evidence a capture happened — the game may be
+    unfocused, the hotkey may be remapped, or `rtx.captureShowMenuOnHotkey`
+    may have opened the menu instead of capturing. This watches the capture
+    directory and reports the stage that actually appeared.
+
+    Apply the `capture-ready` preset first so the hotkey captures immediately
+    rather than opening the capture menu.
+
+    Args:
+        game_dir: Game directory holding `rtx-remix/captures`.
+        exe:      Game executable name for window lookup.
+        window:   Window title substring, as an alternative to exe.
+        chord:    Capture hotkey (default matches `rtx.captureHotKey`).
+        timeout:  Seconds to wait for a new stage file to settle.
+
+    Returns:
+        dict with ok, capture (the new stage) or error.
+    """
+    from . import gamectl as gc
+
+    before = {c["name"] for c in list_captures(game_dir)}
+    hwnd, err = gc.resolve_hwnd(exe, window)
+    if not hwnd:
+        return {"ok": False, "error": err}
+    gc.focus_hwnd(hwnd)
+    sent = gc.send_chord(chord)
+    if not sent.get("ok"):
+        return {"ok": False, "error": sent.get("error", "chord failed")}
+
+    deadline = time.time() + timeout
+    last_size = -1
+    while time.time() < deadline:
+        time.sleep(1.0)
+        fresh = [c for c in list_captures(game_dir) if c["name"] not in before]
+        if fresh:
+            newest = fresh[-1]
+            # A stage still growing is mid-write; wait for its size to settle.
+            if newest["size"] == last_size:
+                return {"ok": True, "capture": newest, "chord": chord}
+            last_size = newest["size"]
+    return {"ok": False, "chord": chord,
+            "error": f"No new capture within {timeout:.0f}s — check that the "
+                     f"game was focused and preset 'capture-ready' is applied"}

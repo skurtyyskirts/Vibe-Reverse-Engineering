@@ -47,6 +47,18 @@ Full syntax and recipes: the `/dynamic-analysis` skill (canonical livetools refe
 - `livetools gamectl` — send keys/clicks to game window (no focus steal)
 - `livetools modules` — loaded module list
 - `livetools analyze <jsonl>` — offline trace aggregation
+- `livetools health --exe <exe>` — running / crashed / hung / not-rendering / frozen / ok
+- `livetools proc start|stop|restart|keep-awake` — game lifecycle; restart is what applying an rtx.conf change costs
+- `livetools screenshot stats` / `diff --tiles CxR` — is the frame usable, and where did it change
+- `livetools remix capture trigger|assets` — USD capture → texture/mesh hashes without the dev menu
+- `livetools remix options search|show` — the full ~1000-option rtx.conf surface, offline
+- `livetools gamectl macro-save` — record a menu path that worked
+
+Exit codes: 0 ok, 1 failed, 3 ran and the answer was negative. Branch on them.
+
+## Autonomous run state (main agent, <5s)
+
+- `python -m autonomy init|status|step|phase|issue|shot-path|watchdog|finish|report <Game>` — resume-safe state for unattended porting runs; `step` and `watchdog` exit 3 when the loop must change approach. Full loop: `autonomous-remix-port` skill.
 
 ## DX analysis scripts (main agent, fast first-pass)
 

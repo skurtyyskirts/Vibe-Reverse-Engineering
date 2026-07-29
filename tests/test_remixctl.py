@@ -149,3 +149,95 @@ def test_read_logs_tail_and_errors_only(tmp_path):
     assert tail["game_d3d9.log"] == ["info: line 9", "err: boom", "warn: odd"]
     errors = remixctl.read_logs(tmp_path, tail=10, errors_only=True)
     assert errors["game_d3d9.log"] == ["err: boom", "warn: odd"]
+
+
+# ── backups ────────────────────────────────────────────────────────────────
+
+def test_backups_are_collected_in_one_folder_not_scattered(tmp_path):
+    conf = tmp_path / "rtx.conf"
+    remixctl.set_option(conf, "rtx.zUp", "False", backup=False)
+    remixctl.set_option(conf, "rtx.zUp", "True")
+    remixctl.set_option(conf, "rtx.sceneScale", "2")
+
+    backups = tmp_path / remixctl.BACKUP_SUBDIR
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        remixctl.BACKUP_SUBDIR, "rtx.conf"]
+    assert len(list(backups.iterdir())) == 2
+
+
+def test_backup_dir_can_be_pointed_at_the_project_workspace(tmp_path):
+    conf = tmp_path / "game" / "rtx.conf"
+    conf.parent.mkdir()
+    project = tmp_path / "patches" / "MyGame" / "backups"
+    remixctl.set_option(conf, "rtx.zUp", "False", backup=False)
+    remixctl.set_option(conf, "rtx.zUp", "True", backup_dir=project)
+    assert len(list(project.iterdir())) == 1
+    assert not (conf.parent / remixctl.BACKUP_SUBDIR).exists()
+
+
+def test_no_backup_is_written_for_a_file_that_does_not_exist_yet(tmp_path):
+    conf = tmp_path / "rtx.conf"
+    assert remixctl.set_option(conf, "rtx.zUp", "True") is None
+    assert not (tmp_path / remixctl.BACKUP_SUBDIR).exists()
+
+
+# ── USD captures ───────────────────────────────────────────────────────────
+
+def _make_capture(game_dir, stage="capture_2026_07_29.usd", textures=(),
+                  meshes=()):
+    root = game_dir / "rtx-remix" / "captures"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / stage).write_text("#usda 1.0\n")
+    for folder, names in (("textures", textures), ("meshes", meshes)):
+        if names:
+            (root / folder).mkdir(exist_ok=True)
+        for name in names:
+            (root / folder / name).write_bytes(b"")
+    return root
+
+
+def test_no_captures_reports_empty(tmp_path):
+    assert remixctl.list_captures(tmp_path) == []
+    assert remixctl.newest_capture(tmp_path) is None
+    assert remixctl.capture_assets(tmp_path)["assets"] == {}
+
+
+def test_captures_are_listed_newest_last(tmp_path):
+    root = _make_capture(tmp_path, stage="capture_a.usd")
+    (root / "capture_b.usd").write_text("#usda 1.0\n")
+    import os
+    os.utime(root / "capture_a.usd", (1, 1))
+    names = [c["name"] for c in remixctl.list_captures(tmp_path)]
+    assert names == ["capture_a.usd", "capture_b.usd"]
+    assert remixctl.newest_capture(tmp_path)["name"] == "capture_b.usd"
+
+
+def test_asset_hashes_are_read_from_exported_filenames(tmp_path):
+    _make_capture(tmp_path,
+                  textures=["A1B2C3D4E5F60718.dds", "deadbeefcafe1234.dds"],
+                  meshes=["0123456789ABCDEF.usd"])
+    found = remixctl.capture_assets(tmp_path)
+    assert [e["hash"] for e in found["assets"]["texture"]] == [
+        "0xA1B2C3D4E5F60718", "0xDEADBEEFCAFE1234"]
+    assert found["counts"] == {"texture": 2, "mesh": 1}
+
+
+def test_generated_names_are_not_mistaken_for_hashes(tmp_path):
+    # Sky probes and thumbnails share the folder but are not asset identities.
+    _make_capture(tmp_path, textures=["stage_T_SkyProbe.dds", "ab.dds",
+                                      "A1B2C3D4E5F60718.dds"])
+    hashes = [e["hash"] for e in remixctl.capture_assets(tmp_path)["assets"]["texture"]]
+    assert hashes == ["0xA1B2C3D4E5F60718"]
+
+
+def test_hashes_from_a_capture_are_accepted_by_add_hash(tmp_path):
+    _make_capture(tmp_path, textures=["A1B2C3D4E5F60718.dds"])
+    digest = remixctl.capture_assets(tmp_path)["assets"]["texture"][0]["hash"]
+    conf = tmp_path / "rtx.conf"
+    assert remixctl.add_hash(conf, "rtx.uiTextures", digest, backup=False) == [digest]
+    assert remixctl.load_conf(conf)["rtx.uiTextures"] == digest
+
+
+def test_capture_ready_preset_disables_the_menu_prompt():
+    options = remixctl.PRESETS["capture-ready"]["options"]
+    assert options["rtx.captureShowMenuOnHotkey"] == "False"

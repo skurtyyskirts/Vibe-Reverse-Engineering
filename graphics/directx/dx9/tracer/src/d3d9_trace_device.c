@@ -474,6 +474,15 @@ static void write_post_data(FILE *f, int slot, DWORD *args) {
             } __except(EXCEPTION_EXECUTE_HANDLER) {}
         }
         break;
+    case SLOT_CreateVertexBuffer:  /* ppVB / ppIB is arg index 4 */
+    case SLOT_CreateIndexBuffer:
+        if (args[4]) {
+            __try {
+                DWORD created = *(DWORD*)(size_t)args[4];
+                fprintf(f, ",\"created_handle\":\"0x%08X\"", created);
+            } __except(EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        break;
     }
 }
 

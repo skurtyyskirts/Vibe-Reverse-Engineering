@@ -287,6 +287,44 @@ def send_key(key_name: str, hold_ms: int = 50) -> dict:
     return {"ok": True, "key": key_name, "vk": hex(vk)}
 
 
+def send_chord(combo: str, hold_ms: int = 80) -> dict:
+    """Send a modifier chord like "ALT+X" via SendInput (game must be foreground).
+
+    All keys are pressed down in order, held together, then released in
+    reverse order — required for hotkeys like the RTX Remix menu (ALT+X),
+    which ignore sequential presses.
+
+    Args:
+        combo:   Plus-separated key names from VK_MAP (e.g. "ALT+X",
+                 "CTRL+SHIFT+Q").
+        hold_ms: How long the full chord is held before release.
+
+    Returns:
+        dict with ok, combo, vks
+    """
+    names = [n.strip().upper() for n in combo.split("+") if n.strip()]
+    vks = []
+    for name in names:
+        vk = VK_MAP.get(name)
+        if vk is None:
+            return {"ok": False, "error": f"Unknown key in chord: '{name}'. "
+                    f"Valid: {', '.join(sorted(VK_MAP))}"}
+        vks.append(vk)
+    if not vks:
+        return {"ok": False, "error": "Empty chord"}
+
+    for vk in vks:
+        dn = (INPUT * 1)(_make_key_input(vk, up=False))
+        user32.SendInput(1, dn, ctypes.sizeof(INPUT))
+        time.sleep(0.02)
+    time.sleep(hold_ms / 1000.0)
+    for vk in reversed(vks):
+        up = (INPUT * 1)(_make_key_input(vk, up=True))
+        user32.SendInput(1, up, ctypes.sizeof(INPUT))
+        time.sleep(0.02)
+    return {"ok": True, "combo": combo, "vks": [hex(v) for v in vks]}
+
+
 def send_keys(hwnd: int, sequence: str, delay_ms: int = 200) -> dict:
     """Focus hwnd then send a space-separated key sequence via SendInput.
 
@@ -294,6 +332,7 @@ def send_keys(hwnd: int, sequence: str, delay_ms: int = 200) -> dict:
         KEY_NAME          — keydown + keyup
         WAIT:N            — pause N milliseconds
         HOLD:KEY_NAME:N   — hold key N ms before keyup
+        CHORD:A+B         — press keys together, release in reverse (e.g. CHORD:ALT+X)
 
     Args:
         hwnd:      Target window handle (will be focused before sending).
@@ -321,6 +360,10 @@ def send_keys(hwnd: int, sequence: str, delay_ms: int = 200) -> dict:
             ms  = int(parts[2]) if len(parts) > 2 else 500
             r   = send_key(key, hold_ms=ms)
             actions.append({**r, "action": "hold", "hold_ms": ms})
+            time.sleep(delay_ms / 1000.0)
+        elif upper.startswith("CHORD:"):
+            r = send_chord(token.split(":", 1)[1])
+            actions.append({**r, "action": "chord"})
             time.sleep(delay_ms / 1000.0)
         else:
             r = send_key(token)

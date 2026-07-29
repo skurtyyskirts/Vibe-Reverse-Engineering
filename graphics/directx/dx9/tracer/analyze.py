@@ -1148,6 +1148,188 @@ def do_vtx_formats(records: list[dict]) -> None:
             print(f"    (elements not captured in init phase)")
 
 
+D3DUSAGE_DYNAMIC = 0x00000200
+D3DFVF_XYZRHW = 0x0004
+D3DDECLUSAGE_POSITIONT = 9
+_STREAMSOURCE_INSTANCEDATA = 0x40000000
+_STREAMSOURCE_INDEXEDDATA = 0x80000000
+
+
+def do_hash_stability(records: list[dict]) -> None:
+    """Flag draws whose geometry will produce unstable RTX Remix hashes.
+
+    Remix hashes draw geometry (default rule: positions,indices,texcoords,
+    geometrydescriptor,vertexlayout,vertexshader) to identify assets for
+    replacement and light anchoring. Geometry whose bytes change frame to
+    frame — UP draws, dynamic/rewritten vertex buffers, CPU skinning,
+    pretransformed vertices — gets a different hash every frame, breaking
+    replacements and causing texture/light flicker.
+
+    The trace has no vertex bytes, so this reports *risk factors* visible in
+    the API stream plus cross-frame draw diffing. Verify at runtime with the
+    geometry-hash debug view (rtx.debugView.debugViewIdx = 277): unstable
+    hashes show as per-frame color flicker (livetools screenshot diff).
+    """
+    # Decl elements and buffer usage flags, when creation happened in-capture
+    decl_elements: dict[str, list[dict]] = {}
+    vb_usage: dict[str, int] = {}
+    dynamic_vb_creates = 0
+    in_frame_buffer_creates = 0
+    for r in records:
+        slot = r["slot"]
+        if slot == SLOT["CreateVertexDeclaration"]:
+            handle = r.get("created_handle")
+            elements = r.get("data", {}).get("elements", [])
+            if handle and elements:
+                decl_elements[handle] = elements
+        elif slot in (SLOT["CreateVertexBuffer"], SLOT["CreateIndexBuffer"]):
+            usage = _int(r.get("args", {}).get("Usage", 0))
+            if usage & D3DUSAGE_DYNAMIC:
+                dynamic_vb_creates += 1
+            if r.get("frame", -1) >= 0:
+                in_frame_buffer_creates += 1
+            handle = r.get("created_handle")
+            if handle:
+                vb_usage[handle] = usage
+
+    runtime = [r for r in records if r.get("frame", -1) >= 0]
+    state = DeviceState()
+    stream_freqs: dict[int, int] = {}
+
+    # signature -> per-frame count, plus evidence sets
+    frames: set[int] = set()
+    sig_frames: defaultdict[tuple, dict[int, int]] = defaultdict(dict)
+    sig_vbs: defaultdict[tuple, set] = defaultdict(set)
+    sig_example: dict[tuple, int] = {}
+    flagged: defaultdict[str, list[tuple[int, str]]] = defaultdict(list)
+    draw_count = 0
+
+    for r in runtime:
+        slot = r["slot"]
+        if slot in STATE_SET_SLOTS:
+            state.apply(r)
+            if slot == SLOT["SetStreamSourceFreq"]:
+                args = r.get("args", {})
+                stream_freqs[_int(args.get("StreamNumber", 0))] = \
+                    _int(args.get("Setting", 0))
+            continue
+        if slot not in GEOMETRY_DRAW_SLOTS:
+            continue
+
+        draw_count += 1
+        args = r.get("args", {})
+        method = r.get("method", "?")
+        seq = r.get("seq", 0)
+        frame = r.get("frame", 0)
+        frames.add(frame)
+        vb0, stride0 = state.stream_sources.get(0, (None, 0))
+
+        sig = (
+            method,
+            _int(args.get("PrimitiveType", 0)),
+            _int(args.get("PrimitiveCount", 0)),
+            _int(args.get("NumVertices", 0)),
+            state.vertex_decl or f"fvf:0x{state.fvf:X}",
+            stride0,
+            state.vs or "NULL",
+            state.textures.get(0, "NULL"),
+        )
+        sig_frames[sig][frame] = sig_frames[sig].get(frame, 0) + 1
+        sig_example.setdefault(sig, seq)
+
+        desc = f"{method} prims={_int(args.get('PrimitiveCount', 0))} tex0={state.textures.get(0, 'NULL')}"
+        if method.endswith("UP"):
+            flagged["up-draw"].append((seq, desc))
+        else:
+            if vb0:
+                sig_vbs[sig].add(vb0)
+            usage = vb_usage.get(vb0)
+            if usage is not None and usage & D3DUSAGE_DYNAMIC:
+                flagged["dynamic-vb"].append((seq, desc))
+
+        pretransformed = bool(state.fvf & D3DFVF_XYZRHW) if not state.vertex_decl else any(
+            e.get("Usage") == D3DDECLUSAGE_POSITIONT
+            for e in decl_elements.get(state.vertex_decl, []))
+        if pretransformed:
+            flagged["pretransformed"].append((seq, desc))
+        if state.vs and state.vs != "NULL":
+            flagged["programmable-vs"].append((seq, desc))
+        freq0 = stream_freqs.get(0, 1)
+        if freq0 & (_STREAMSOURCE_INSTANCEDATA | _STREAMSOURCE_INDEXEDDATA):
+            flagged["instanced"].append((seq, desc))
+
+    print(f"\n=== Remix Hash Stability ({draw_count} draws, "
+          f"{len(frames)} frame(s), {len(sig_frames)} unique signatures) ===")
+
+    if dynamic_vb_creates or in_frame_buffer_creates:
+        print(f"\n  Buffer creation: {dynamic_vb_creates} D3DUSAGE_DYNAMIC "
+              f"buffer(s) created in trace, {in_frame_buffer_creates} "
+              f"buffer(s) created mid-frame (per-frame churn)")
+
+    category_notes = {
+        "up-draw": "Draw*UP re-uploads vertex bytes every call — hash changes "
+                   "whenever the data animates",
+        "dynamic-vb": "D3DUSAGE_DYNAMIC buffer bound at draw — contents "
+                      "typically rewritten per frame (CPU anim/skinning)",
+        "pretransformed": "POSITIONT/XYZRHW vertices are camera-dependent — "
+                          "hash churns with every viewpoint change",
+        "programmable-vs": "Vertex shader bound — Remix needs vertex capture "
+                           "(rtx.useVertexCapture) or FFP conversion; hash "
+                           "includes the 'vertexshader' rule token",
+        "instanced": "Instanced stream frequencies — per-instance data "
+                     "changes affect generated geometry",
+    }
+    for cat, hits in sorted(flagged.items(), key=lambda kv: -len(kv[1])):
+        print(f"\n  [{cat}] {len(hits)} draw(s) — {category_notes[cat]}")
+        for seq, desc in hits[:5]:
+            print(f"    seq {seq:>7d}  {desc}")
+        if len(hits) > 5:
+            print(f"    ... and {len(hits) - 5} more")
+
+    # Cross-frame diffing needs at least two frames to compare
+    if len(frames) >= 2:
+        flickering = [(sig, by_frame) for sig, by_frame in sig_frames.items()
+                      if len(by_frame) < len(frames)]
+        churning = [(sig, vbs) for sig, vbs in sig_vbs.items() if len(vbs) > 1]
+
+        if flickering:
+            print(f"\n  [frame-flicker] {len(flickering)} signature(s) absent "
+                  f"from some frames (appear/disappear across capture):")
+            for sig, by_frame in flickering[:5]:
+                print(f"    seq {sig_example[sig]:>7d}  {sig[0]} "
+                      f"prims={sig[2]} in frames {sorted(by_frame)}")
+            if len(flickering) > 5:
+                print(f"    ... and {len(flickering) - 5} more")
+        if churning:
+            print(f"\n  [vb-churn] {len(churning)} signature(s) drawn from "
+                  f"different vertex buffers across frames (buffer "
+                  f"recreation/renaming):")
+            for sig, vbs in churning[:5]:
+                print(f"    seq {sig_example[sig]:>7d}  {sig[0]} "
+                      f"prims={sig[2]} buffers={sorted(vbs)}")
+    else:
+        print("\n  (capture 2+ frames for cross-frame flicker/churn diffing)")
+
+    print("\n  Recommendations:")
+    if flagged["programmable-vs"]:
+        print("    - Shader draws: rtx.useVertexCapture = True (simple VS "
+              "still setting FFP matrices), else FFP-convert via "
+              "remix-comp-proxy (dx9-ffp-port skill)")
+    if flagged["up-draw"] or flagged["dynamic-vb"]:
+        print("    - Animated vertex data: preset 'hash-stable-anim' drops "
+              "positions/texcoords from the generation hash rule "
+              "(livetools remix preset apply hash-stable-anim)")
+    if flagged["pretransformed"]:
+        print("    - Pretransformed draws are usually HUD/UI: tag their "
+              "textures (livetools remix conf add-hash rtx.uiTextures 0x..)")
+    if not any(flagged.values()):
+        print("    - No API-level risk factors found; geometry hashes should "
+              "be stable under the default rule")
+    print("    - Verify live: preset 'debug-geometry-hash' (view 277), then "
+          "screenshot two idle frames and diff — color flicker on static "
+          "geometry means unstable hashes")
+
+
 def do_diff_draws(records: list[dict], seq_a: int, seq_b: int) -> None:
     runtime = [r for r in records if r.get("frame", -1) >= 0]
     state = DeviceState()
@@ -1866,6 +2048,9 @@ def run_analysis(args: argparse.Namespace) -> None:
         ran_any = True
     if args.classify_draws:
         do_classify_draws(records)
+        ran_any = True
+    if args.hash_stability:
+        do_hash_stability(records)
         ran_any = True
     if args.redundant:
         do_redundant(records)

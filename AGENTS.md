@@ -7,7 +7,7 @@ This file is the canonical, harness-agnostic instruction set. Claude Code loads 
 - **Tool catalog** (every retools / livetools / dx9tracer command, syntax, caveats): `.claude/references/tool-catalog.md`
 - **Tool dispatch** (which tool for which question; what runs inline vs delegated): `.claude/rules/tool-dispatch.md`
 - **Analysis workflow** (bootstrap ordering, Ghidra backend, index/query, parallel patterns): `.claude/rules/subagent-workflow.md`
-- **Skills** (`dx9-ffp-port`, `dynamic-analysis`): `.claude/skills/` — canonical copies. Non-Claude harnesses self-install them (see "Skill Setup" below).
+- **Skills** (`dx9-ffp-port`, `dynamic-analysis`, `autonomous-remix-port`): `.claude/skills/` — canonical copies. Non-Claude harnesses self-install them (see "Skill Setup" below).
 - **Custom agents** (`static-analyzer`): `.claude/agents/` — canonical definitions. `.cursor/agents/`, `.github/agents/`, and `.kiro/agents/` hold thin harness-native mirrors that defer to the canonical files, so only the `.claude/agents/` copies get edited.
 
 ## Skill Setup (do this first on non-Claude harnesses)
@@ -71,6 +71,7 @@ Update the KB when you: identify a function's purpose, reconstruct a struct, ide
 - **Bootstrap new binaries first.** No or sparse `patches/<project>/kb.h` means run `bootstrap.py` and `pyghidra_backend.py analyze` before other static analysis — full workflow in `.claude/rules/subagent-workflow.md`.
 - **DX9 FFP porting** (renderer.cpp, ffp_state, remix-comp-proxy.ini, draw routing, VS constants, vertex declarations, matrix mapping, skinning, build/deploy of a proxy patch): use the `dx9-ffp-port` skill before editing.
 - **Dynamic analysis** (attach, breakpoints, tracing, runtime patching): use the `dynamic-analysis` skill as the canonical livetools reference.
+- **Autonomous/unattended Remix porting** (drive the game with inputs + screenshots, control the Remix runtime, stabilize geometry hashes, iterate until it renders correctly): use the `autonomous-remix-port` skill. RTX Remix option catalog and symptom→fix playbook: `.claude/references/remix-compat-catalog.md`.
 
 ## Engineering Standards
 

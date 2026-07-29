@@ -72,7 +72,7 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "Open the Remix dev menu?" → `livetools remix menu` (ALT+X chord)
 - "Is this frame usable, or is the capture black?" → `livetools screenshot stats` / the verdict `grab` prints (exit 3 = unusable)
 - "Where on screen did it change — HUD or world?" → `livetools screenshot diff --tiles 4x3`
-- "Is the game alive / crashed / hung / frozen?" → `livetools health --exe game.exe` (exit 3 = not ok)
+- "Is the game alive / crashed / hung / frozen?" → `livetools health --exe game.exe` (exit 3 = not ok; `session-locked` and `runtime-error` are reported, never relaunched)
 - "Restart the game to apply an rtx.conf change" → `livetools proc restart <exe_path>` (stops every instance, relaunches, waits for the window)
 - "Keep an overnight run from being slept by Windows" → `livetools proc keep-awake --duration 43200` (background)
 - "What texture hashes exist so I can tag UI/sky/decals?" → `livetools remix capture trigger` then `remix capture assets` (no dev menu needed)

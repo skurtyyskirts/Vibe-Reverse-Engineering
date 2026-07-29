@@ -49,7 +49,7 @@ Full syntax and recipes: the `/dynamic-analysis` skill (canonical livetools refe
 - `livetools gamectl` — send keys/clicks to game window (no focus steal)
 - `livetools modules` — loaded module list
 - `livetools analyze <jsonl>` — offline trace aggregation
-- `livetools health --exe <exe>` — running / crashed / hung / not-rendering / frozen / ok
+- `livetools health --exe <exe>` — session-locked / not-running / crashed / no-window / hung / runtime-error / not-rendering / frozen / ok
 - `livetools proc start|stop|restart|keep-awake` — game lifecycle; restart is what applying an rtx.conf change costs
 - `livetools screenshot stats` / `diff --tiles CxR` — is the frame usable, and where did it change
 - `livetools remix capture trigger|assets` — USD capture → texture/mesh hashes without the dev menu

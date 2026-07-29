@@ -93,9 +93,11 @@ python -m autonomy watchdog MyGame
 ```
 
 It checks health, dismisses blocking error dialogs, and relaunches a crashed,
-hung or frozen game. Exit 0 healthy, 1 still broken, **3 crash loop** (the game
-died `CRASH_LOOP_LIMIT` times in a row — stop repeating whatever precedes it,
-the crash is a finding about the port). Diagnose without touching the game with
+hung or frozen game. Exit 0 healthy, 1 still broken, **3 crash loop** — the
+game died `CRASH_LOOP_LIMIT` times during this phase, whether or not each
+relaunch worked. A game that comes back cleanly every time and dies again
+minutes later still trips it. Stop repeating whatever precedes the crash; it
+is a finding about the port. Diagnose without touching the game using
 `--no-recover`.
 
 Underneath it, `livetools health` distinguishes the failure modes that all look
@@ -103,13 +105,19 @@ identical from a screenshot:
 
 | verdict | meaning | response |
 |---------|---------|----------|
+| `session-locked` | no interactive desktop | **stop** — every input and capture is void until a human unlocks the console |
 | `not-running` | no process | relaunch |
-| `crashed` | crash reporter or error dialog up | read it, dismiss, relaunch |
+| `crashed` | error dialog up, or the process is gone with a crash reporter running | read it, dismiss, relaunch |
 | `no-window` | alive, no window yet | wait |
 | `hung` | window ignores WM_NULL | kill and relaunch |
+| `runtime-error` | the runtime logged a fatal (`device lost`, out of memory) | **do not relaunch** — it reproduces. File it and change the setting that caused it |
 | `not-rendering` | frame is black/blank | **not a navigation problem** — fullscreen, dead device, or a debug view producing nothing |
-| `frozen` | frames identical across the check window | kill and relaunch |
+| `frozen` | frames match across the check window | kill and relaunch |
 | `ok` | alive, responding, rendering | proceed |
+
+The watchdog relaunches only the recoverable ones. `session-locked`,
+`runtime-error` and `not-rendering` are reported instead, because relaunching
+reproduces them and burns the crash budget on an action that cannot work.
 
 **Exit codes across the toolset**: 0 succeeded, 1 the command failed, 3 it ran
 and the answer was no (game unhealthy, frame black, nothing changed, budget

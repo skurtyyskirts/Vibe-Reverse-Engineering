@@ -73,7 +73,7 @@ python -m livetools dipcnt callers [N]        # sample N DIP calls, histogram re
 python -m livetools dipcnt off
 ```
 
-### Game Window Input (no Frida, no focus steal)
+### Game Window Input (no Frida; takes the foreground)
 ```
 python -m livetools gamectl --exe <game.exe> info
 python -m livetools gamectl --exe <game.exe> key RETURN
@@ -255,7 +255,16 @@ python -m livetools dipcnt off
 
 ### gamectl -- Send input to the game window
 
-Posts WM_KEYDOWN/WM_KEYUP/clicks directly to the target window handle — no Frida, no focus stealing, works with the game in the background. Use to navigate menus or trigger in-game actions during long traces.
+Sends input with `SendInput` after forcing the game to the foreground via
+`AttachThreadInput` — the DirectInput and raw-input games this toolkit targets
+read device state directly and ignore posted window messages entirely.
+
+**Input goes to whatever is focused.** It is not delivered to a background
+window, and the foreground grab is deliberate. During an unattended run the
+machine cannot be used for anything else: a stray focus change sends the next
+keystrokes into the user's own applications. `send_key`/`send_keys` report
+`ok: False` with `injected: 0` when a higher-integrity foreground window
+blocks injection — check it rather than assuming the input landed.
 
 ```bash
 python -m livetools gamectl --exe game.exe info                      # show hwnd, title, pid
@@ -514,6 +523,25 @@ python -m livetools analyze scene.jsonl --export-csv scene.csv
 10. **Zero hits means something is wrong — diagnose, don't give up.** If trace/collect returns 0 samples: (a) Ask the user: is the game window focused and actively rendering? (b) Verify the address: `disasm <addr>` in livetools — confirm real code exists there. (c) Try a known-hot address: `dipcnt callers 10` finds confirmed active call sites; trace one to prove the hook pipeline works. (d) Only after all three pass should you reconsider whether the original address is actually called during gameplay.
 
 ---
+
+## Persist What You Proved
+
+A trace, breakpoint or memwatch that establishes what a function does is the
+strongest evidence available — stronger than any decompilation. It is worth
+nothing next session unless it lands in the knowledge base, where it makes
+every later decompilation more readable:
+
+```bash
+python -m retools.kb add patches/<Game>/kb.h \
+    --func 0x401000 "void __cdecl ProcessInput(int key)" \
+    --global 0x7C5548 "Object* g_mainObject" \
+    --type "struct Entity { float x, y, z; int flags; };"
+python -m retools.kb validate patches/<Game>/kb.h
+```
+
+Close out every recipe below this way. `add` keeps one entry per address and
+refuses anything that would not parse back; `validate` finds entries that
+already slipped in. Then pass `--types patches/<Game>/kb.h` to the decompiler.
 
 ## Anti-Patterns
 

@@ -21,6 +21,15 @@
 - **License file**: `tools/radare2-6.1.0-w64/LICENSE.APACHE2`
 - **Files**: `tools/radare2-6.1.0-w64/share/r2ghidra_sleigh/`
 
+## Bundled Reference Data (`livetools/data/`)
+
+### dxvk-remix RTX option reference (`rtx_options.tsv`)
+
+- **License**: zlib/libpng
+- **Source**: https://github.com/NVIDIAGameWorks/dxvk-remix (`RtxOptions.md`)
+- **Contents**: option names, types, defaults, ranges and descriptions,
+  reformatted as TSV. Regenerate with `python -m livetools remix options sync`.
+
 ## Python Dependencies (installed via pip, not shipped)
 
 | Package | License | Source |

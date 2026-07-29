@@ -1,12 +1,13 @@
 # Vibe Reverse Engineering — Agent Instructions
 
-LLM-friendly static and dynamic analysis toolkit for x86/x64 PE binaries (`.exe` / `.dll`), combining static analysis (`retools`), dynamic analysis (`livetools` via Frida), and D3D9 frame tracing. Work is organized around per-game knowledge base files (`kb.h`) that accumulate discoveries and feed back into richer decompilation.
+LLM-friendly static and dynamic analysis toolkit for x86/x64 PE binaries (`.exe` / `.dll`), combining static analysis (`retools`), dynamic analysis (`livetools` via Frida), D3D9 frame tracing, and unattended RTX Remix porting (`autonomy`). Work is organized around per-game knowledge base files (`kb.h`) that accumulate discoveries and feed back into richer decompilation.
 
 This file is the canonical, harness-agnostic instruction set. Claude Code loads it via `.claude/CLAUDE.md`; Cursor, Copilot, Codex, and other agents read it directly. Deeper references live under `.claude/` and apply to every harness:
 
 - **Tool catalog** (every retools / livetools / dx9tracer command, syntax, caveats): `.claude/references/tool-catalog.md`
 - **Tool dispatch** (which tool for which question; what runs inline vs delegated): `.claude/rules/tool-dispatch.md`
 - **Analysis workflow** (bootstrap ordering, Ghidra backend, index/query, parallel patterns): `.claude/rules/subagent-workflow.md`
+- **Toolset recommendations** (external tools worth adding, ranked, with licenses and integration points): `.claude/references/toolset-recommendations.md`
 - **Skills** (`dx9-ffp-port`, `dynamic-analysis`, `autonomous-remix-port`): `.claude/skills/` — canonical copies. Non-Claude harnesses self-install them (see "Skill Setup" below).
 - **Custom agents** (`static-analyzer`): `.claude/agents/` — canonical definitions. `.cursor/agents/`, `.github/agents/`, and `.kiro/agents/` hold thin harness-native mirrors that defer to the canonical files, so only the `.claude/agents/` copies get edited.
 
@@ -31,8 +32,9 @@ These directories are **shared tooling and templates**. Do not modify them for g
 - `rtx_remix_tools/dx/remix-comp-proxy/` — proxy framework **template** (copied per-game)
 - `rtx_remix_tools/dx/scripts/` — DX9 analysis scripts (shared tooling)
 - `retools/` — static analysis toolkit (shared tooling)
-- `livetools/` — Frida-based dynamic analysis (shared tooling)
+- `livetools/` — Frida-based dynamic analysis, game/window control, RTX Remix runtime control (shared tooling)
 - `graphics/` — DX9 tracer framework (shared tooling)
+- `autonomy/` — unattended porting run state machine (shared tooling)
 
 **Per-game work goes in `patches/<GameName>/`.** When starting a new game, copy `rtx_remix_tools/dx/remix-comp-proxy/` (excluding `build/`) to `patches/<GameName>/` and edit the copy. If the user says "edit remix-comp-proxy code" without specifying, ask whether they mean the template or a game copy.
 
@@ -62,7 +64,17 @@ struct Foo { int x; float y; };
 $ 0x7C5548 Object* g_mainObject
 ```
 
-Update the KB when you: identify a function's purpose, reconstruct a struct, identify a global, find magic constants (define an enum), or resolve RTTI class names. Always pass `--types patches/<project>/kb.h` to the decompiler once a KB exists.
+Update the KB when you: identify a function's purpose, reconstruct a struct, identify a global, find magic constants (define an enum), or resolve RTTI class names. This includes findings from **live** tools — a trace or breakpoint that proves what a function does ends with the function in kb.h, not in a chat message. Always pass `--types patches/<project>/kb.h` to the decompiler once a KB exists.
+
+Write entries with the KB tool rather than by hand; it keeps one entry per address, refuses lines that would not become usable entries, and `validate` finds any that already slipped in:
+
+```bash
+python -m retools.kb add patches/MyGame/kb.h \
+    --func 0x401000 "void __cdecl ProcessInput(int key)" \
+    --global 0x7C5548 "Object* g_mainObject" \
+    --type "struct Foo { int x; float y; };"
+python -m retools.kb validate patches/MyGame/kb.h
+```
 
 ## Working Method
 
@@ -71,7 +83,8 @@ Update the KB when you: identify a function's purpose, reconstruct a struct, ide
 - **Bootstrap new binaries first.** No or sparse `patches/<project>/kb.h` means run `bootstrap.py` and `pyghidra_backend.py analyze` before other static analysis — full workflow in `.claude/rules/subagent-workflow.md`.
 - **DX9 FFP porting** (renderer.cpp, ffp_state, remix-comp-proxy.ini, draw routing, VS constants, vertex declarations, matrix mapping, skinning, build/deploy of a proxy patch): use the `dx9-ffp-port` skill before editing.
 - **Dynamic analysis** (attach, breakpoints, tracing, runtime patching): use the `dynamic-analysis` skill as the canonical livetools reference.
-- **Autonomous/unattended Remix porting** (drive the game with inputs + screenshots, control the Remix runtime, stabilize geometry hashes, iterate until it renders correctly): use the `autonomous-remix-port` skill. RTX Remix option catalog and symptom→fix playbook: `.claude/references/remix-compat-catalog.md`.
+- **Autonomous/unattended Remix porting** (drive the game with inputs + screenshots, control the Remix runtime, stabilize geometry hashes, iterate until it renders correctly): use the `autonomous-remix-port` skill. Run state lives in `python -m autonomy` (phases with evidence gates, attempt budgets, watchdog recovery, journal); RTX Remix option catalog and symptom→fix playbook: `.claude/references/remix-compat-catalog.md`, with the complete ~1000-option surface searchable offline via `python -m livetools remix options search`.
+- **Branch on exit codes, not prose.** `livetools health/proc/screenshot/remix/gamectl` and `python -m autonomy` return 0 on success, 1 when the command failed, and 3 when the command ran and the answer was negative (game unhealthy, frame black, nothing changed, attempt budget exhausted).
 
 ## Engineering Standards
 

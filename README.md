@@ -42,7 +42,38 @@ python -m livetools gamectl --exe game.exe keys "DOWN DOWN RETURN"
 python -m livetools gamectl --exe game.exe macro --macro-file patches/MyGame/macros.json navigate_menu
 ```
 
+**Screenshots** (`livetools/screenshot.py`) capture the game window to PNG and compare captures. Beyond a changed-pixel ratio it reports whether a frame is usable at all (`black`/`blank` means the capture path or the renderer is broken, not that the game is showing something boring) and can localize change to a screen region, which separates HUD churn from world churn.
+
 **D3D9 frame tracer** (`graphics/directx/dx9/tracer/`) captures every `IDirect3DDevice9` call with arguments, backtraces, shader bytecodes, and matrix data. Outputs JSONL for offline analysis.
+
+**RTX Remix runtime control** (`livetools/remixctl.py`) edits `rtx.conf`, applies named presets, toggles the developer menu, reads the runtime logs, and takes USD captures. Captures are what make texture tagging scriptable: the developer menu only shows texture hashes to a person clicking through tabs, while a capture writes them to disk next to the exported image.
+
+```bash
+python -m livetools remix preset apply capture-ready -d "C:/Games/MyGame"
+python -m livetools remix capture trigger -d "C:/Games/MyGame" --exe game.exe
+python -m livetools remix capture assets  -d "C:/Games/MyGame"
+python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD -d "C:/Games/MyGame"
+```
+
+All ~1000 rtx.conf options ship as an offline table, so the agent can find settings nobody documented and `conf set` rejects names and values the runtime would silently ignore:
+
+```bash
+python -m livetools remix options search "ghosting"
+python -m livetools remix options show rtx.uniqueObjectDistance
+```
+
+**Game health and lifecycle** (`livetools/health.py`, `livetools/procctl.py`) answer the question every unattended iteration starts with. `health` reduces the probes to one verdict — `not-running`, `crashed`, `no-window`, `hung`, `not-rendering`, `frozen`, `ok` — because those need different responses and look identical in a screenshot. `proc` stops, starts and restarts the game (every rtx.conf change costs a restart) and keeps Windows from sleeping an overnight run.
+
+**Unattended porting runs** (`autonomy/`) hold the state an agent's context cannot: which phase the port is in and the evidence that proved it, how many times an approach has failed before it should be abandoned, open issues, a journal, and numbered screenshots.
+
+```bash
+python -m autonomy init MyGame --game-dir "C:/Games/MyGame" --exe game.exe
+python -m autonomy watchdog MyGame     # relaunch/unblock the game if it needs it
+python -m autonomy status MyGame       # phase, next action, attempt budgets
+python -m autonomy report MyGame --out patches/MyGame/findings.md
+```
+
+Commands the loop branches on return exit codes: 0 succeeded, 1 the command failed, 3 it ran and the answer was no (game unhealthy, frame black, nothing changed, approach exhausted).
 
 **RTX Remix FFP template** (`rtx_remix_tools/dx/dx9_ffp_template/`) is a D3D9 proxy DLL that converts shader-based games to fixed-function pipeline for RTX Remix compatibility.
 

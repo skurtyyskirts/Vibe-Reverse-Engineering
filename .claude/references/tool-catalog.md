@@ -25,7 +25,7 @@ These are fast (<5s) and allowed inline:
 - "Read a typed value from the PE file" → `python -m retools.readmem $B $VA $TYPE`
 - "What constant flows into this register?" → `python -m retools.dataflow $B $VA --constants`
 - "Trace where this value comes from" → `python -m retools.dataflow $B $VA --slice TARGET_VA:REG`
-- "Build an ASI patch DLL" → `python -m retools.asi_patcher build spec.json`
+- "Inspect or scaffold an ASI patch spec" → `python -m retools.asi_patcher show|init`
 - "Does a Ghidra project exist for this binary?" → `python retools/pyghidra_backend.py status $B --project $P`
 - "What's in this game's index?" → `python -m retools.index status <Game> [--db PATH]`
 - "Query facts already indexed (funcs, names, xrefs, strings, imports, callers/callees)" → `python -m retools.query <Game> "SQL" [--db PATH] [--json] [--list-tables] [--schema TABLE]`
@@ -52,6 +52,7 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "What crashed and what was the error message?" → dump diagnosis + throwmap
 - "Map all throw sites to error strings" → throwmap list
 - "First time analyzing a binary?" → bootstrap (2-5 min) + pyghidra analyze (5-15 min) in parallel
+- "Build an ASI patch DLL" → `asi_patcher build spec.json --vcvarsall <path>` (invokes MSVC; not inline-fast)
 - "Bulk signature scan" → sigdb scan (1-3 min)
 - "Seed/refresh the index from a Ghidra project" → `pyghidra_backend.py export` (funcs/names/xrefs/blocks, source='ghidra', authoritative over provisional bootstrap rows)
 - "Push kb.h names/prototypes into the Ghidra project" → `pyghidra_backend.py kb-apply` (idempotent)
@@ -65,10 +66,31 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "Who writes to this memory address?" → `livetools memwatch`
 - "Send keys/clicks to the game window?" → `livetools gamectl` (chords via `key ALT+X` or `CHORD:ALT+X` token)
 - "What does the game look like right now?" → `livetools screenshot grab` (window → PNG; no Frida)
-- "Did the screen change / is the render flickering?" → `livetools screenshot diff` (changed-pixel ratio + bbox)
+- "Did the screen change / is the render flickering?" → `livetools screenshot diff --expect changed|unchanged` (exit 3 = not what you expected; the same command means opposite things when navigating vs testing for flicker)
 - "Is Remix installed / what's in rtx.conf / what do the logs say?" → `livetools remix status` / `remix log` (no Frida)
 - "Change an RTX Remix setting (debug view, fallback light, hash rule, texture tags)?" → `livetools remix conf set|add-hash` or `remix preset apply` (see `.claude/references/remix-compat-catalog.md`)
 - "Open the Remix dev menu?" → `livetools remix menu` (ALT+X chord)
+- "Is this frame usable, or is the capture black?" → `livetools screenshot stats` / the verdict `grab` prints (exit 3 = unusable)
+- "Where on screen did it change — HUD or world?" → `livetools screenshot diff --tiles 4x3`
+- "Is the game alive / crashed / hung / frozen?" → `livetools health --exe game.exe` (exit 3 = not ok; `session-locked` and `runtime-error` are reported, never relaunched)
+- "Restart the game to apply an rtx.conf change" → `livetools proc restart <exe_path>` (stops every instance, relaunches, waits for the window)
+- "Keep an overnight run from being slept by Windows" → `livetools proc keep-awake --duration 43200` (background)
+- "What texture hashes exist so I can tag UI/sky/decals?" → `livetools remix capture trigger` then `remix capture assets` (no dev menu needed)
+- "Which rtx.conf option does X?" → `livetools remix options search <term>` (all ~1000 options, offline)
+- "Save a menu path that worked" → `livetools gamectl macro-save <name> --steps "..."`
+
+### Autonomous run state (`python -m autonomy`, main agent)
+
+Durable state for unattended porting runs — phases with evidence gates, attempt
+budgets that stop infinite retries, journal, screenshot numbering, watchdog
+recovery. Full loop: the `autonomous-remix-port` skill.
+
+- "Start / resume an unattended port" → `autonomy init` / `autonomy status`
+- "Record what this iteration did" → `autonomy step --action ... --key ... --outcome ok|fail` (**exit 3 = key exhausted, change approach**)
+- "Is the game still up? put it back if not" → `autonomy watchdog <Game>` (exit 3 = crash loop)
+- "Mark a phase passed" → `autonomy phase <Game> --complete N --gate <evidence>` (evidence required)
+- "Did my change break the scene that already worked?" → `autonomy baseline <Game> --save|--check <label> --image <png>` (exit 3 = the frame no longer matches)
+- "Write the final report" → `autonomy finish` + `autonomy report --out patches/<Game>/findings.md`
 
 ### DX analysis scripts (main agent, fast first-pass)
 
@@ -178,6 +200,15 @@ These are fast first-pass scanners — they surface candidate addresses. Follow 
 Main-agent only (requires a live process; static-analyzer subagents must not use these). Canonical command reference with syntax, read-spec format, and recipes: the `/dynamic-analysis` skill (`.claude/skills/dynamic-analysis/SKILL.md`). Covers attach/spawn, breakpoints, trace/steptrace/collect, mem read/write/alloc, scan, disasm, modules, dipcnt, memwatch, vishook, gamectl, screenshot, remix (RTX Remix runtime control), and offline `analyze`. `gamectl`, `screenshot`, and `remix` need no attached process.
 
 **NOTE**: Some processes require their window to be focused for traces to capture data.
+
+**Exit codes**: `health`, `proc`, `screenshot`, `remix` and `gamectl` return 0
+on success, 1 when the command failed, and 3 when the command ran and the
+answer was negative (game unhealthy, frame black, nothing changed). Branch on
+these rather than parsing stdout.
+
+**Non-Frida subcommands** — `gamectl`, `screenshot`, `health`, `proc` and
+`remix` drive the game and its runtime without attaching, so they work
+alongside Remix (which occupies the `d3d9.dll` slot the tracer also wants).
 
 ## D3D9 Frame Trace (`graphics/directx/dx9/tracer/`) -- full-frame API capture and analysis
 

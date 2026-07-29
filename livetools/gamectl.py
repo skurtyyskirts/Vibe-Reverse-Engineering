@@ -42,6 +42,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wt
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -50,15 +51,31 @@ from pathlib import Path
 INPUT_KEYBOARD       = 1
 INPUT_MOUSE          = 0
 KEYEVENTF_KEYUP      = 0x0002
+KEYEVENTF_EXTENDEDKEY = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP   = 0x0004
+MOUSEEVENTF_MOVE     = 0x0001
 SW_RESTORE           = 9
 SW_SHOW              = 5
 GW_OWNER             = 4
 TH32CS_SNAPPROCESS   = 0x00000002
 
-user32   = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
+class _NoWin32:
+    """Stands in for a Win32 DLL off Windows.
+
+    Input and window control are Windows-only, but the macro file format, the
+    key map and the token syntax are not — keeping the module importable
+    everywhere means those can be tested on any platform instead of only in a
+    Windows checkout.
+    """
+
+    def __getattr__(self, name: str):
+        raise OSError(f"{name} requires Windows; this is {sys.platform}")
+
+
+_win32 = sys.platform == "win32"
+user32   = ctypes.windll.user32   if _win32 else _NoWin32()
+kernel32 = ctypes.windll.kernel32 if _win32 else _NoWin32()
 
 # ── Virtual key map ────────────────────────────────────────────────────────
 
@@ -72,7 +89,9 @@ VK_MAP: dict[str, int] = {
     "F1": 0x70, "F2": 0x71, "F3": 0x72,  "F4": 0x73,
     "F5": 0x74, "F6": 0x75, "F7": 0x76,  "F8": 0x77,
     "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B,
-    "SHIFT": 0x10, "CTRL": 0x11, "ALT": 0x12,
+    # SHFT/CTL match how rtx.conf spells its hotkeys (rtx.captureHotKey =
+    # CTRL, SHFT, Q), so a chord can be copied straight out of the config.
+    "SHIFT": 0x10, "SHFT": 0x10, "CTRL": 0x11, "CTL": 0x11, "ALT": 0x12,
     **{c: 0x41 + i for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")},
     **{str(d): 0x30 + d for d in range(10)},
     "NUMPAD0": 0x60, "NUMPAD1": 0x61, "NUMPAD2": 0x62, "NUMPAD3": 0x63,
@@ -107,8 +126,6 @@ class _INPUT_UNION(ctypes.Union):
 class INPUT(ctypes.Structure):
     _fields_ = [("type", wt.DWORD), ("union", _INPUT_UNION)]
 
-WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
-
 class PROCESSENTRY32(ctypes.Structure):
     _fields_ = [
         ("dwSize",              wt.DWORD),
@@ -124,29 +141,44 @@ class PROCESSENTRY32(ctypes.Structure):
     ]
 
 
-def _find_pid(exe_name: str) -> int | None:
-    """Return the PID of the first process whose exe matches exe_name."""
+def find_pids(exe_name: str) -> list[int]:
+    """Return every PID whose exe matches exe_name, in enumeration order.
+
+    Relaunching a game that did not fully exit leaves two instances running;
+    only one of them owns the window, so callers that assume a single match
+    end up driving the wrong process.
+    """
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if snap == ctypes.c_void_p(-1).value:
-        return None
+        return []
     entry = PROCESSENTRY32()
     entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+    pids: list[int] = []
     try:
         if not kernel32.Process32First(snap, ctypes.byref(entry)):
-            return None
+            return []
         while True:
             name = entry.szExeFile.decode("utf-8", errors="replace")
             if name.lower() == exe_name.lower():
-                return entry.th32ProcessID
+                pids.append(entry.th32ProcessID)
             if not kernel32.Process32Next(snap, ctypes.byref(entry)):
                 break
     finally:
         kernel32.CloseHandle(snap)
-    return None
+    return pids
+
+
+def find_pid(exe_name: str) -> int | None:
+    """Return the PID of the first process whose exe matches exe_name."""
+    pids = find_pids(exe_name)
+    return pids[0] if pids else None
 
 # ── Window lookup ──────────────────────────────────────────────────────────
 
-WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+# WINFUNCTYPE only exists on Windows; the callback is never invoked elsewhere,
+# so the calling convention is irrelevant to keeping the module importable.
+WNDENUMPROC = (ctypes.WINFUNCTYPE if _win32 else ctypes.CFUNCTYPE)(
+    wt.BOOL, wt.HWND, wt.LPARAM)
 
 
 def find_hwnd_by_exe(exe_name: str) -> int | None:
@@ -158,7 +190,7 @@ def find_hwnd_by_exe(exe_name: str) -> int | None:
     Returns:
         Window handle (int) or None if not found.
     """
-    pid = _find_pid(exe_name)
+    pid = find_pid(exe_name)
     if pid is None:
         return None
     result: list[int] = []
@@ -224,6 +256,33 @@ def get_window_info(hwnd: int) -> dict:
 
 # ── Focus management ───────────────────────────────────────────────────────
 
+def set_dpi_aware() -> bool:
+    """Opt this process into per-monitor DPI awareness.
+
+    Without it Windows reports virtualized coordinates on a scaled display:
+    click targets read off a screenshot land in the wrong place, and captures
+    come back a different size than the window. Idempotent — Windows refuses
+    the second call, which is fine.
+
+    Returns:
+        True if awareness is set (whether by this call or an earlier one).
+    """
+    if not _win32:
+        return False
+    import ctypes as _c
+    try:
+        # -4 = PER_MONITOR_AWARE_V2, the only mode that also fixes non-client
+        # scaling; older Windows falls back to the process-wide flag.
+        if _c.windll.user32.SetProcessDpiAwarenessContext(-4):
+            return True
+    except AttributeError:
+        pass
+    try:
+        return bool(_c.windll.shcore.SetProcessDpiAwareness(2) == 0)
+    except (AttributeError, OSError):
+        return bool(user32.SetProcessDPIAware())
+
+
 def focus_hwnd(hwnd: int) -> bool:
     """Force hwnd to the foreground using AttachThreadInput.
 
@@ -242,10 +301,15 @@ def focus_hwnd(hwnd: int) -> bool:
     fg_tid  = user32.GetWindowThreadProcessId(fg_hwnd, None)
 
     if fg_tid and fg_tid != my_tid:
-        user32.AttachThreadInput(my_tid, fg_tid, True)
-        user32.BringWindowToTop(hwnd)
-        user32.SetForegroundWindow(hwnd)
-        user32.AttachThreadInput(my_tid, fg_tid, False)
+        attached = user32.AttachThreadInput(my_tid, fg_tid, True)
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            # Staying attached to another process's input queue outlives this
+            # call and makes later input land in the wrong place.
+            if attached:
+                user32.AttachThreadInput(my_tid, fg_tid, False)
     else:
         user32.SetForegroundWindow(hwnd)
 
@@ -254,15 +318,43 @@ def focus_hwnd(hwnd: int) -> bool:
 
 # ── SendInput keyboard ─────────────────────────────────────────────────────
 
+#: Keys on the extended part of the keyboard. Without KEYEVENTF_EXTENDEDKEY
+#: their scancodes collide with the numpad, and games reading scancodes
+#: (DirectInput, raw input — i.e. most of the games this toolkit targets)
+#: either ignore the press or act on the wrong key. Menu navigation is arrows,
+#: so getting this wrong breaks the whole navigation loop.
+EXTENDED_VKS = frozenset({
+    0x21, 0x22, 0x23, 0x24,          # PAGEUP PAGEDOWN END HOME
+    0x25, 0x26, 0x27, 0x28,          # LEFT UP RIGHT DOWN
+    0x2D, 0x2E,                      # INSERT DELETE
+    0x6F,                            # numpad divide
+    0x90,                            # NUMLOCK
+})
+
+
 def _make_key_input(vk: int, up: bool = False) -> INPUT:
+    flags = KEYEVENTF_KEYUP if up else 0
+    if vk in EXTENDED_VKS:
+        flags |= KEYEVENTF_EXTENDEDKEY
     inp = INPUT()
     inp.type = INPUT_KEYBOARD
     inp.union.ki.wVk   = vk
     inp.union.ki.wScan = user32.MapVirtualKeyW(vk, 0)
-    inp.union.ki.dwFlags = KEYEVENTF_KEYUP if up else 0
+    inp.union.ki.dwFlags = flags
     inp.union.ki.time = 0
     inp.union.ki.dwExtraInfo = None
     return inp
+
+
+def _inject(*inputs: INPUT) -> int:
+    """Send input events, returning how many the system actually accepted.
+
+    SendInput silently injects nothing when a higher-integrity process owns
+    the foreground (an elevated game, UIPI). Reporting zero here is what stops
+    the loop from recording "sent RETURN" for an input that never arrived.
+    """
+    array = (INPUT * len(inputs))(*inputs)
+    return user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT))
 
 
 def send_key(key_name: str, hold_ms: int = 50) -> dict:
@@ -279,12 +371,16 @@ def send_key(key_name: str, hold_ms: int = 50) -> dict:
     if vk is None:
         return {"ok": False, "error": f"Unknown key: '{key_name}'. "
                 f"Valid: {', '.join(sorted(VK_MAP))}"}
-    dn = (INPUT * 1)(_make_key_input(vk, up=False))
-    user32.SendInput(1, dn, ctypes.sizeof(INPUT))
+    injected = _inject(_make_key_input(vk, up=False))
     time.sleep(hold_ms / 1000.0)
-    up = (INPUT * 1)(_make_key_input(vk, up=True))
-    user32.SendInput(1, up, ctypes.sizeof(INPUT))
-    return {"ok": True, "key": key_name, "vk": hex(vk)}
+    injected += _inject(_make_key_input(vk, up=True))
+    if injected < 2:
+        return {"ok": False, "key": key_name, "vk": hex(vk),
+                "injected": injected,
+                "error": "SendInput was blocked — the foreground window "
+                         "likely belongs to a higher-integrity process; run "
+                         "this toolkit elevated"}
+    return {"ok": True, "key": key_name, "vk": hex(vk), "injected": injected}
 
 
 def send_chord(combo: str, hold_ms: int = 80) -> dict:
@@ -313,16 +409,20 @@ def send_chord(combo: str, hold_ms: int = 80) -> dict:
     if not vks:
         return {"ok": False, "error": "Empty chord"}
 
+    injected = 0
     for vk in vks:
-        dn = (INPUT * 1)(_make_key_input(vk, up=False))
-        user32.SendInput(1, dn, ctypes.sizeof(INPUT))
+        injected += _inject(_make_key_input(vk, up=False))
         time.sleep(0.02)
     time.sleep(hold_ms / 1000.0)
     for vk in reversed(vks):
-        up = (INPUT * 1)(_make_key_input(vk, up=True))
-        user32.SendInput(1, up, ctypes.sizeof(INPUT))
+        injected += _inject(_make_key_input(vk, up=True))
         time.sleep(0.02)
-    return {"ok": True, "combo": combo, "vks": [hex(v) for v in vks]}
+    result = {"ok": injected == 2 * len(vks), "combo": combo,
+              "vks": [hex(v) for v in vks], "injected": injected}
+    if not result["ok"]:
+        result["error"] = ("SendInput was blocked — the foreground window "
+                           "likely belongs to a higher-integrity process")
+    return result
 
 
 def send_keys(hwnd: int, sequence: str, delay_ms: int = 200) -> dict:
@@ -383,6 +483,7 @@ def click_at(hwnd: int, x: int, y: int) -> dict:
     Returns:
         dict with ok, screen_x, screen_y
     """
+    set_dpi_aware()
     focus_hwnd(hwnd)
     pt = wt.POINT(x, y)
     user32.ClientToScreen(hwnd, ctypes.byref(pt))
@@ -391,9 +492,46 @@ def click_at(hwnd: int, x: int, y: int) -> dict:
 
     dn = INPUT(); dn.type = INPUT_MOUSE; dn.union.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
     up = INPUT(); up.type = INPUT_MOUSE; up.union.mi.dwFlags = MOUSEEVENTF_LEFTUP
-    arr = (INPUT * 2)(dn, up)
-    user32.SendInput(2, arr, ctypes.sizeof(INPUT))
-    return {"ok": True, "screen_x": pt.x, "screen_y": pt.y, "client_x": x, "client_y": y}
+    injected = _inject(dn, up)
+    return {"ok": injected == 2, "screen_x": pt.x, "screen_y": pt.y,
+            "client_x": x, "client_y": y, "injected": injected}
+
+
+def move_mouse(dx: int, dy: int, steps: int = 1, step_ms: int = 10) -> dict:
+    """Send relative mouse motion — camera look, not cursor positioning.
+
+    Games read mouse-look through relative deltas (DirectInput / raw input),
+    not cursor position, so `SetCursorPos` turns nothing. Reaching a specific
+    in-level viewpoint means turning the camera, which means this.
+
+    Large turns are sent as several smaller deltas: games commonly clamp or
+    drop a single huge delta as a glitch.
+
+    Args:
+        dx, dy:  Total relative motion in mouse units (right/down positive).
+        steps:   Split the motion across this many events.
+        step_ms: Delay between steps.
+
+    Returns:
+        dict with ok, dx, dy, steps and injected.
+    """
+    if steps < 1:
+        return {"ok": False, "error": "steps must be >= 1"}
+    injected = 0
+    for i in range(steps):
+        # Distribute by difference so the deltas sum exactly to (dx, dy).
+        part_x = dx * (i + 1) // steps - dx * i // steps
+        part_y = dy * (i + 1) // steps - dy * i // steps
+        move = INPUT()
+        move.type = INPUT_MOUSE
+        move.union.mi.dx = part_x
+        move.union.mi.dy = part_y
+        move.union.mi.dwFlags = MOUSEEVENTF_MOVE
+        injected += _inject(move)
+        if step_ms:
+            time.sleep(step_ms / 1000.0)
+    return {"ok": injected == steps, "dx": dx, "dy": dy, "steps": steps,
+            "injected": injected}
 
 # ── Macro support ──────────────────────────────────────────────────────────
 
@@ -413,6 +551,42 @@ def load_macros(path: str | Path) -> dict[str, dict]:
     if not isinstance(data, dict):
         raise ValueError("Macro file must be a JSON object")
     return data
+
+
+def save_macro(path: str | Path, name: str, steps: str,
+               description: str | None = None) -> dict:
+    """Record a working input sequence into a macro file.
+
+    Menu paths are discovered one verified input at a time, which is slow.
+    Saving the path the moment it works means a later restart replays it
+    instead of rediscovering it — and restarts are constant, because every
+    rtx.conf change needs one.
+
+    Args:
+        path:        Macro JSON file; created (with parents) if missing.
+        name:        Macro key, e.g. `title_to_gameplay`.
+        steps:       Space-separated token sequence in `send_keys` syntax.
+        description: What this path does and where it ends up. None keeps the
+            existing description when re-saving a macro with better timing.
+
+    Returns:
+        dict with `ok`, `macro`, `path` and `replaced`.
+
+    Raises:
+        ValueError: If steps is empty, or the file holds something other than
+            a JSON object.
+    """
+    if not steps.strip():
+        raise ValueError("Refusing to save a macro with no steps")
+    p = Path(path)
+    macros = load_macros(p) if p.exists() else {}
+    replaced = name in macros
+    if description is None:
+        description = macros.get(name, {}).get("description", "")
+    macros[name] = {"description": description, "steps": steps.strip()}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(macros, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "macro": name, "path": str(p), "replaced": replaced}
 
 
 def run_macro(hwnd: int, name: str, macros: dict[str, dict],

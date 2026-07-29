@@ -17,15 +17,17 @@ Run all tools from repo root via `python -m <module>`. **ALWAYS pass `--types pa
 - `python -m retools.readmem $B $VA $TYPE` — read typed PE data
 - `python -m retools.dataflow $B $VA --constants` — forward constant propagation
 - `python -m retools.dataflow $B $VA --slice TARGET_VA:REG` — backward register slice
-- `python -m retools.asi_patcher build spec.json` — build ASI patch DLL
+- `python -m retools.asi_patcher show|init` — inspect or scaffold a patch spec
 - `python retools/pyghidra_backend.py status $B --project $P` — Ghidra project existence check
 - `python -m retools.index status <Game> [--db PATH]` — per-table row counts + schema_version for the game's index.db
+- `python -m retools.kb add|validate|show patches/<Game>/kb.h` — write confirmed findings back into the KB, or find lines that will not become usable entries
 - `python -m retools.query <Game> "SQL" [--db PATH] [--json] [--list-tables] [--schema TABLE]` — read-only SQL over index.db (`callers`/`callees`/`grep` views); prefer this over a fresh xrefs/datarefs/search scan whenever index.db already has the data
 
 ## Delegate to `static-analyzer`
 
 Everything else in `retools`. Tell it WHAT you need, not HOW. D3D9-specific questions — try DX scripts first (faster).
 
+- `asi_patcher build` — shells out to MSVC and needs `--vcvarsall`; minutes, not seconds
 - Decompile / callgraph / xrefs / string search / datarefs / structrefs / RTTI / throwmap / dumpinfo — check `index status` / `query` first; only fall back to these scanners when index.db lacks the answer
 - Bootstrap new binary (2-5 min) / pyghidra analyze (5-15 min) / bulk sigdb scan (1-3 min)
 - `pyghidra_backend.py export` (seed index.db from a Ghidra project) / `kb-apply` (push kb.h into the Ghidra project)
@@ -47,6 +49,18 @@ Full syntax and recipes: the `/dynamic-analysis` skill (canonical livetools refe
 - `livetools gamectl` — send keys/clicks to game window (no focus steal)
 - `livetools modules` — loaded module list
 - `livetools analyze <jsonl>` — offline trace aggregation
+- `livetools health --exe <exe>` — session-locked / not-running / crashed / no-window / hung / runtime-error / not-rendering / frozen / ok
+- `livetools proc start|stop|restart|keep-awake` — game lifecycle; restart is what applying an rtx.conf change costs
+- `livetools screenshot stats` / `diff --tiles CxR` — is the frame usable, and where did it change
+- `livetools remix capture trigger|assets` — USD capture → texture/mesh hashes without the dev menu
+- `livetools remix options search|show` — the full ~1000-option rtx.conf surface, offline
+- `livetools gamectl macro-save` — record a menu path that worked
+
+Exit codes: 0 ok, 1 failed, 3 ran and the answer was negative. Branch on them.
+
+## Autonomous run state (main agent, <5s)
+
+- `python -m autonomy init|status|step|phase|issue|shot-path|watchdog|baseline|finish|report <Game>` — resume-safe state for unattended porting runs; `step` and `watchdog` exit 3 when the loop must change approach. Full loop: `autonomous-remix-port` skill.
 
 ## DX analysis scripts (main agent, fast first-pass)
 

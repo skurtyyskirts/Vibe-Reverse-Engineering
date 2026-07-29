@@ -71,6 +71,13 @@ from pathlib import Path
 
 from . import client
 
+#: Exit codes. Handlers an unattended loop branches on return these instead of
+#: only printing prose: 0 succeeded, EXIT_FAILED the command could not run,
+#: EXIT_NEGATIVE it ran and the answer was no (game unhealthy, frame black,
+#: nothing changed).
+EXIT_FAILED = 1
+EXIT_NEGATIVE = 3
+
 
 def _parse_addr(addr_str: str) -> str:
     val = int(addr_str, 16) if addr_str.startswith("0x") else int(addr_str, 16)
@@ -629,25 +636,48 @@ def cmd_memwatch(args: argparse.Namespace) -> None:
 
 # ── gamectl command ───────────────────────────────────────────────────────
 
-def cmd_gamectl(args: argparse.Namespace) -> None:
+def cmd_gamectl(args: argparse.Namespace) -> int:
     from . import gamectl as gc
     action = args.gc_action
+
+    # Reading and writing the macro file is bookkeeping — it must work whether
+    # or not the game is up (it often is not, right after a crash).
+    if action == "macros":
+        macros = gc.load_macros(args.macro_file)
+        print(f"Macros in {args.macro_file}:")
+        for name, defn in sorted(macros.items()):
+            print(f"  {name:<24s}  {defn.get('description', '')}")
+            print(f"    steps: {defn.get('steps', '')}")
+        return 0
+
+    if action == "macro-save":
+        try:
+            r = gc.save_macro(args.macro_file, args.macro_name, args.steps,
+                              description=args.description)
+        except (OSError, ValueError) as e:
+            print(f"[error] {e}")
+            return EXIT_FAILED
+        verb = "Replaced" if r["replaced"] else "Saved"
+        print(f"{verb} macro '{r['macro']}' in {r['path']}")
+        return 0
 
     hwnd, err = gc.resolve_hwnd(getattr(args, "exe", None),
                                 getattr(args, "window", None))
     if action == "info":
         # info doesn't need a valid hwnd to report the error clearly
         if not hwnd:
-            print(f"[error] {err}"); return
+            print(f"[error] {err}")
+            return EXIT_FAILED
         info = gc.get_window_info(hwnd)
         print(f"hwnd:  {info['hwnd']}")
         print(f"title: {info['title']}")
         print(f"pid:   {info['pid']}")
         print(f"tid:   {info['tid']}")
-        return
+        return 0
 
     if not hwnd:
-        print(f"[error] {err}"); return
+        print(f"[error] {err}")
+        return EXIT_FAILED
 
     if action == "key":
         focused = gc.focus_hwnd(hwnd)
@@ -667,6 +697,16 @@ def cmd_gamectl(args: argparse.Namespace) -> None:
     elif action == "click":
         r = gc.click_at(hwnd, args.x, args.y)
         print(r)
+        if not r["ok"]:
+            return EXIT_FAILED
+
+    elif action == "mousemove":
+        gc.focus_hwnd(hwnd)
+        r = gc.move_mouse(args.dx, args.dy, steps=args.steps,
+                          step_ms=args.step_ms)
+        print(r)
+        if not r["ok"]:
+            return EXIT_FAILED
 
     elif action == "macro":
         macros = gc.load_macros(args.macro_file)
@@ -676,21 +716,18 @@ def cmd_gamectl(args: argparse.Namespace) -> None:
                   f"{r['steps_result']['count']} actions sent.")
         else:
             print(f"[error] {r.get('error', r)}")
-
-    elif action == "macros":
-        macros = gc.load_macros(args.macro_file)
-        print(f"Macros in {args.macro_file}:")
-        for name, defn in sorted(macros.items()):
-            print(f"  {name:<24s}  {defn.get('description', '')}")
-            print(f"    steps: {defn.get('steps', '')}")
+            return EXIT_FAILED
 
     else:
-        print("Usage: python -m livetools gamectl [info|key|keys|click|macro|macros]")
+        print("Usage: python -m livetools gamectl "
+              "[info|key|keys|click|mousemove|macro|macros|macro-save]")
+        return 2
+    return 0
 
 
 # ── screenshot command ────────────────────────────────────────────────────
 
-def cmd_screenshot(args: argparse.Namespace) -> None:
+def cmd_screenshot(args: argparse.Namespace) -> int:
     from . import screenshot as ss
     action = getattr(args, "ss_action", None)
 
@@ -700,38 +737,179 @@ def cmd_screenshot(args: argparse.Namespace) -> None:
                                     getattr(args, "window", None))
         if not hwnd:
             print(f"[error] {err}")
-            return
+            return EXIT_FAILED
         out = Path(args.out) if args.out else ss.default_output_path()
         try:
             path = ss.capture_window_png(hwnd, out,
                                          client_only=not args.full_window)
         except OSError as e:
             print(f"[error] capture failed: {e}")
-            return
-        w, h, _ = ss.decode_png(path.read_bytes())
+            return EXIT_FAILED
+        w, h, rgb = ss.decode_png(path.read_bytes())
         print(f"Saved {path} ({w}x{h})")
+        # An unusable capture is the single most common silent failure of an
+        # unattended run — say so at capture time, not three steps later.
+        verdict = ss.classify_frame(ss.frame_stats(w, h, rgb))
+        print(f"  frame: {verdict['verdict']} ({verdict['reason']})")
+        if not verdict["usable"]:
+            print("  [warn] nothing rendered — check exclusive fullscreen, "
+                  "a crashed device, or remix log --errors")
+            return EXIT_NEGATIVE
+        return 0
 
-    elif action == "diff":
+    if action == "diff":
         try:
-            r = ss.diff_png(args.file_a, args.file_b, tolerance=args.tolerance)
+            wa, ha, rgb_a = ss.decode_png(Path(args.file_a).read_bytes())
+            wb, hb, rgb_b = ss.decode_png(Path(args.file_b).read_bytes())
+            if (wa, ha) != (wb, hb):
+                raise ValueError(f"Dimension mismatch: {wa}x{ha} vs {wb}x{hb}")
+            r = ss.diff_rgb(wa, ha, rgb_a, rgb_b, tolerance=args.tolerance)
         except (OSError, ValueError) as e:
             print(f"[error] {e}")
-            return
-        verdict = "CHANGED" if r["ratio"] >= args.threshold else "same"
+            return EXIT_FAILED
+        changed = r["ratio"] >= args.threshold
+        verdict = "CHANGED" if changed else "same"
         print(f"{r['changed']}/{r['total']} pixels differ "
-              f"(ratio {r['ratio']:.4f}, threshold {args.threshold}) -> {verdict}")
+              f"(ratio {r['ratio']:.4f}, threshold {args.threshold}) -> {verdict}"
+              f"  (expected {args.expect})")
         if r["bbox"]:
             x0, y0, x1, y1 = r["bbox"]
             print(f"  changed region: ({x0},{y0})-({x1},{y1}) "
                   f"[{x1 - x0 + 1}x{y1 - y0 + 1}]")
+        if args.tiles:
+            try:
+                cols, rows = (int(v) for v in args.tiles.lower().split("x"))
+            except ValueError:
+                print(f"[error] --tiles wants COLSxROWS, got {args.tiles!r}")
+                return EXIT_FAILED
+            grid = ss.tiled_diff(wa, ha, rgb_a, rgb_b, cols=cols, rows=rows,
+                                 tolerance=args.tolerance)
+            print(f"  tiles ({cols}x{rows}), ratio per cell:")
+            for row in range(rows):
+                cells = [t for t in grid["tiles"] if t["row"] == row]
+                print("    " + " ".join(f"{t['ratio']:6.3f}" for t in cells))
+            hot = grid["hottest"]
+            print(f"  hottest: col {hot['col']} row {hot['row']} "
+                  f"(ratio {hot['ratio']:.4f})")
+        return 0 if changed == (args.expect == "changed") else EXIT_NEGATIVE
 
-    else:
-        print("Usage: python -m livetools screenshot [grab|diff]")
+    if action == "stats":
+        try:
+            r = ss.stats_png(args.file, stride=args.stride)
+        except (OSError, ValueError) as e:
+            print(f"[error] {e}")
+            return EXIT_FAILED
+        print(f"{args.file}: {r['width']}x{r['height']} -> "
+              f"{r['verdict'].upper()} ({r['reason']})")
+        print(f"  luma {r['luma_mean']} +/- {r['luma_stdev']}, "
+              f"black {r['black_ratio']:.3f}, white {r['white_ratio']:.3f}")
+        print(f"  colors {r['color_count']}, edges {r['edge_density']:.4f}, "
+              f"saturation {r['saturation_mean']}")
+        return 0 if r["usable"] else EXIT_NEGATIVE
+
+    print("Usage: python -m livetools screenshot [grab|diff|stats]")
+    return 2
+
+
+# ── health command ────────────────────────────────────────────────────────
+
+def cmd_health(args: argparse.Namespace) -> int:
+    from . import health as hl
+
+    if args.wait:
+        hwnd = hl.wait_for_window(args.exe, timeout=args.wait)
+        if not hwnd:
+            print(f"[error] no window for {args.exe} within {args.wait}s")
+            return EXIT_NEGATIVE
+        print(f"Window {hwnd} appeared for {args.exe}")
+
+    try:
+        state = hl.check(args.exe, game_dir=args.game_dir,
+                         frozen_check=args.frozen_check,
+                         dismiss_dialogs=args.dismiss_dialogs,
+                         frozen_ratio=(args.frozen_ratio
+                                       if args.frozen_ratio is not None
+                                       else hl.FROZEN_RATIO))
+    except OSError as e:
+        print(f"[error] {e}")
+        return EXIT_FAILED
+
+    print(f"{args.exe}: {state['verdict'].upper()} — {state['reason']}")
+    print(f"  pid={state['pid']} hwnd={state['hwnd']} "
+          f"responding={state['responding']}")
+    if state["frame"]:
+        print(f"  frame: {state['frame']['verdict']} "
+              f"({state['frame']['reason']})")
+    if state.get("freeze_ratio") is not None:
+        print(f"  freeze check: {state['freeze_ratio']:.4f} changed ratio")
+    for window in state["error_windows"]:
+        print(f"  [dialog] {window['class_name']}: {window['title']}")
+    for window in state.get("dismissed", []):
+        print(f"  [dismissed] {window['title'] or window['class_name']}")
+    for line in state["fatal_log_lines"]:
+        print(f"  [log] {line}")
+    return 0 if state["verdict"] == "ok" else EXIT_NEGATIVE
+
+
+# ── proc command ──────────────────────────────────────────────────────────
+
+def cmd_proc(args: argparse.Namespace) -> int:
+    from . import procctl as pc
+    action = getattr(args, "proc_action", None)
+
+    try:
+        if action == "status":
+            info = pc.status(args.exe)
+            print(f"{info['exe']}: {info['count']} instance(s) {info['pids']}")
+            print(f"  window hwnd={info['hwnd']} pid={info['window_pid']} "
+                  f"title={info['title']!r}")
+            if info["count"] > 1:
+                print("  [warn] more than one instance — stop them all before "
+                      "relaunching, window lookup picks the first match")
+            return 0 if info["count"] else EXIT_NEGATIVE
+
+        if action == "stop":
+            r = pc.stop(args.exe, timeout=args.timeout, force=not args.no_force)
+            print(f"closed={r['closed']} terminated={r['terminated']} "
+                  f"survivors={r['survivors']}")
+            if not r["ok"]:
+                print(f"[error] still running: {r['survivors']}")
+            return 0 if r["ok"] else EXIT_FAILED
+
+        if action == "start":
+            r = pc.start(args.exe_path, wait=args.wait)
+            print(f"Launched pid={r['pid']} hwnd={r['hwnd']}")
+            if not r["ok"]:
+                print(f"[error] no window within {args.wait}s")
+            return 0 if r["ok"] else EXIT_NEGATIVE
+
+        if action == "restart":
+            r = pc.restart(args.exe_path, wait=args.wait,
+                           stop_timeout=args.timeout)
+            print(f"stop: {r['stopped']['ok']}  start: "
+                  f"{r['started']['ok'] if r['started'] else 'skipped'}")
+            if not r["ok"]:
+                print(f"[error] {r.get('error', 'window did not appear')}")
+            return 0 if r["ok"] else EXIT_FAILED
+
+        if action == "keep-awake":
+            print(f"Holding sleep/display off for {args.duration:.0f}s "
+                  "(run in background)")
+            pc.keep_awake(args.duration)
+            print("Released.")
+            return 0
+
+        print("Usage: python -m livetools proc "
+              "[status|stop|start|restart|keep-awake]")
+        return 2
+    except (OSError, FileNotFoundError) as e:
+        print(f"[error] {e}")
+        return EXIT_FAILED
 
 
 # ── remix command ─────────────────────────────────────────────────────────
 
-def cmd_remix(args: argparse.Namespace) -> None:
+def cmd_remix(args: argparse.Namespace) -> int:
     from . import remixctl as rx
     action = getattr(args, "rx_action", None)
 
@@ -746,6 +924,11 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 print(f"  - {m}")
         else:
             print("Remix markers: none found (runtime not detected)")
+        print("Config surfaces:")
+        for surface, cfg in info["configs"].items():
+            state = (f"{cfg['options']} option(s)" if cfg["present"]
+                     else "not present")
+            print(f"  {surface:<7s} {Path(cfg['path']).name:<12s} {state}")
         print(f"rtx.conf:  {info['rtx_conf'] or 'not present'}")
         if info["rtx_conf"]:
             options = rx.load_conf(info["rtx_conf"])
@@ -758,8 +941,12 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 print(f"  {lg['name']:<32s} {lg['size']:>10d} B  {lg['mtime']}")
 
     elif action == "conf":
-        conf = rx.conf_path(args.game_dir)
         sub = args.conf_action
+        if not sub:
+            print("Usage: python -m livetools remix conf "
+                  "[get|set|unset|add-hash|remove-hash]")
+            return 2
+        conf = rx.conf_path(args.game_dir, args.surface)
         if sub == "get":
             options = rx.load_conf(conf)
             if args.key:
@@ -773,60 +960,111 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 for k in sorted(options):
                     print(f"{k} = {options[k]}")
         elif sub == "set":
+            from . import rtx_options as ro
+            if args.surface != "rtx":
+                # Only rtx.conf has a generated option reference upstream.
+                bak = rx.set_option(conf, args.key, args.value,
+                                    backup=not args.no_backup,
+                                    backup_dir=args.backup_dir)
+                print(f"{args.key} = {args.value}  written to {conf}")
+                if bak:
+                    print(f"  backup: {bak}")
+                print("  (takes effect on next game launch)")
+                return 0
+            if not ro.is_known(args.key) and not args.force:
+                print(f"[error] {args.key} is not a known dxvk-remix option — "
+                      "the runtime would ignore it silently.")
+                near = ro.suggest(args.key)
+                if near:
+                    print(f"  did you mean: {', '.join(near)}")
+                print("  search with: python -m livetools remix options "
+                      f"search {args.key.split('.')[-1]}")
+                print("  write it anyway with --force")
+                return EXIT_FAILED
+            problem = ro.validate_value(args.key, args.value)
+            if problem and not args.force:
+                entry = ro.lookup(args.key)
+                print(f"[error] {args.key} {problem}")
+                print(f"  type={entry['type']} default={entry['default'] or '-'}")
+                print("  write it anyway with --force")
+                return EXIT_FAILED
             bak = rx.set_option(conf, args.key, args.value,
-                                backup=not args.no_backup)
+                                backup=not args.no_backup,
+                                backup_dir=args.backup_dir)
             print(f"{args.key} = {args.value}  written to {conf}")
             if bak:
                 print(f"  backup: {bak}")
             print("  (takes effect on next game launch)")
         elif sub == "unset":
             removed = rx.unset_option(conf, args.key,
-                                      backup=not args.no_backup)
+                                      backup=not args.no_backup,
+                                      backup_dir=args.backup_dir)
             print(f"{args.key} {'removed from' if removed else 'was not set in'} {conf}")
         elif sub == "add-hash":
-            if args.key not in rx.HASH_SET_OPTIONS:
-                print(f"[warn] {args.key} is not a known hash-set option "
-                      f"(continuing anyway)")
+            from . import rtx_options as ro
+            if args.key not in rx.HASH_SET_OPTIONS and not args.force:
+                print(f"[error] {args.key} is not a hash-set option — a hash "
+                      "written to a non-hash option is ignored silently.")
+                print(f"  hash-set options: {', '.join(sorted(rx.HASH_SET_OPTIONS))}")
+                print("  write it anyway with --force")
+                return EXIT_FAILED
+            problem = ro.validate_value(args.key, args.hash)
+            if problem and not args.force:
+                print(f"[error] {args.key} {problem}")
+                return EXIT_FAILED
             hashes = rx.add_hash(conf, args.key, args.hash,
-                                 backup=not args.no_backup)
+                                 backup=not args.no_backup,
+                                 backup_dir=args.backup_dir)
             print(f"{args.key} = {', '.join(hashes)}")
         elif sub == "remove-hash":
             hashes = rx.remove_hash(conf, args.key, args.hash,
-                                    backup=not args.no_backup)
+                                    backup=not args.no_backup,
+                                    backup_dir=args.backup_dir)
             print(f"{args.key} = {', '.join(hashes) if hashes else '(empty, removed)'}")
         else:
             print("Usage: python -m livetools remix conf "
                   "[get|set|unset|add-hash|remove-hash]")
+            return 2
 
     elif action == "preset":
         sub = args.preset_action
         if sub == "list":
             for name in sorted(rx.PRESETS):
-                print(f"  {name:<24s}  {rx.PRESETS[name]['description']}")
+                surfaces = "+".join(sorted(rx.PRESETS[name]["options"]))
+                print(f"  {name:<20s} [{surfaces:<11s}] "
+                      f"{rx.PRESETS[name]['description']}")
         elif sub == "apply":
             if args.name not in rx.PRESETS:
                 print(f"[error] Unknown preset '{args.name}'. "
                       f"Available: {', '.join(sorted(rx.PRESETS))}")
-                return
-            conf = rx.conf_path(args.game_dir)
-            options = rx.apply_preset(conf, args.name,
-                                      backup=not args.no_backup)
-            print(f"Applied preset '{args.name}' to {conf}:")
-            for k, v in options.items():
-                print(f"  {k} = {v}")
+                return EXIT_FAILED
+            applied = rx.apply_preset(args.game_dir, args.name,
+                                      backup=not args.no_backup,
+                                      backup_dir=args.backup_dir)
+            print(f"Applied preset '{args.name}':")
+            for surface, options in applied["options"].items():
+                print(f"  {applied['paths'][surface]}")
+                for k, v in options.items():
+                    print(f"    {k} = {v}")
             print("  (takes effect on next game launch)")
         else:
             print("Usage: python -m livetools remix preset [list|apply]")
+            return 2
 
     elif action == "menu":
-        r = rx.toggle_menu(getattr(args, "exe", None),
-                           getattr(args, "window", None),
-                           chord=args.chord)
+        try:
+            r = rx.toggle_menu(getattr(args, "exe", None),
+                               getattr(args, "window", None),
+                               chord=args.chord)
+        except OSError as e:
+            print(f"[error] {e}")
+            return EXIT_FAILED
         if r.get("ok"):
             print(f"Sent {r['combo']} (focused={r.get('focused')}). "
                   "Screenshot to verify the menu state.")
         else:
             print(f"[error] {r.get('error', '?')}")
+            return EXIT_FAILED
 
     elif action == "log":
         logs = rx.read_logs(args.game_dir, tail=args.tail,
@@ -838,6 +1076,92 @@ def cmd_remix(args: argparse.Namespace) -> None:
             for ln in lines:
                 print(f"  {ln}")
 
+    elif action == "capture":
+        sub = args.capture_action
+        if sub == "list":
+            captures = rx.list_captures(args.game_dir)
+            if not captures:
+                print(f"No captures in {rx.capture_root(args.game_dir)}")
+            for c in captures:
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S",
+                                      time.localtime(c["mtime"]))
+                print(f"  {c['name']:<48s} {c['size']:>12d} B  {stamp}")
+        elif sub == "trigger":
+            try:
+                r = rx.trigger_capture(args.game_dir,
+                                       exe=getattr(args, "exe", None),
+                                       window=getattr(args, "window", None),
+                                       chord=args.chord, timeout=args.timeout)
+            except OSError as e:
+                print(f"[error] {e}")
+                return EXIT_FAILED
+            if r.get("ok"):
+                print(f"Captured {r['capture']['name']} "
+                      f"({r['capture']['size']} B) via {r['chord']}")
+                print("  Read the exported assets with: "
+                      "python -m livetools remix capture assets "
+                      f"-d {args.game_dir}")
+            else:
+                print(f"[error] {r.get('error', '?')}")
+                return EXIT_NEGATIVE
+        elif sub == "assets":
+            found = rx.capture_assets(args.game_dir)
+            print(f"Capture root: {found['root']}")
+            print(f"  {len(found['captures'])} capture(s)")
+            if not found["assets"]:
+                print("  No exported assets — take a capture first "
+                      "(remix capture trigger)")
+            for category, entries in sorted(found["assets"].items()):
+                print(f"== {category} ({len(entries)}) ==")
+                for e in entries[:args.limit]:
+                    print(f"  {e['hash']}  {Path(e['file']).name}")
+                if len(entries) > args.limit:
+                    print(f"  ... {len(entries) - args.limit} more "
+                          f"(raise --limit)")
+        else:
+            print("Usage: python -m livetools remix capture "
+                  "[list|trigger|assets]")
+            return 2
+
+    elif action == "options":
+        from . import rtx_options as ro
+        sub = args.options_action
+        if sub == "search":
+            hits = ro.search(args.term, limit=args.limit)
+            if not hits:
+                print(f"No option matches {args.term!r}")
+            for entry in hits:
+                bounds = "".join(f" {label}={entry[label]}"
+                                 for label in ("min", "max") if entry[label])
+                print(f"{entry['name']}  [{entry['type']}] "
+                      f"default={entry['default'] or '-'}{bounds}")
+                if entry["description"]:
+                    print(f"    {entry['description'][:300]}")
+        elif sub == "show":
+            entry = ro.lookup(args.name)
+            if not entry:
+                print(f"[error] {args.name} is not a known option")
+                near = ro.suggest(args.name)
+                if near:
+                    print(f"  did you mean: {', '.join(near)}")
+                return EXIT_FAILED
+            for field in ("name", "type", "default", "min", "max"):
+                if entry[field]:
+                    print(f"{field:>8s}: {entry[field]}")
+            if entry["description"]:
+                print(f"\n{entry['description']}")
+        elif sub == "sync":
+            try:
+                count = ro.sync(args.source or ro.RTX_OPTIONS_URL)
+            except (OSError, ValueError) as e:
+                print(f"[error] option sync failed: {e}")
+                return EXIT_FAILED
+            print(f"Wrote {count} options to {ro.DATA_FILE}")
+        else:
+            print("Usage: python -m livetools remix options "
+                  "[search|show|sync]")
+            return 2
+
     elif action == "debugviews":
         from .remixctl import DEBUG_VIEWS
         for name, idx in sorted(DEBUG_VIEWS.items(), key=lambda kv: kv[1]):
@@ -845,7 +1169,9 @@ def cmd_remix(args: argparse.Namespace) -> None:
 
     else:
         print("Usage: python -m livetools remix "
-              "[status|conf|preset|menu|log|debugviews]")
+              "[status|conf|preset|menu|log|capture|options|debugviews]")
+        return 2
+    return 0
 
 
 # ── argument parser ────────────────────────────────────────────────────────
@@ -1259,6 +1585,16 @@ def build_parser() -> argparse.ArgumentParser:
     gc_click.add_argument("x", type=int, help="Client X coordinate")
     gc_click.add_argument("y", type=int, help="Client Y coordinate")
 
+    gc_move = gc_sub.add_parser("mousemove",
+        help="Relative mouse motion — turns the camera (mouse-look)")
+    gc_move.add_argument("dx", type=int, help="Horizontal delta (right positive)")
+    gc_move.add_argument("dy", type=int, help="Vertical delta (down positive)")
+    gc_move.add_argument("--steps", type=int, default=8,
+        help="Split the motion across N events (default: 8) — games clamp "
+             "or drop a single huge delta")
+    gc_move.add_argument("--step-ms", type=int, default=10,
+        help="Delay between steps in ms (default: 10)")
+
     gc_macro = gc_sub.add_parser("macro", help="Run a named macro from a JSON file")
     gc_macro.add_argument("macro_name", help="Macro name to execute")
     gc_macro.add_argument("--macro-file", default="macros.json",
@@ -1268,6 +1604,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     gc_macros = gc_sub.add_parser("macros", help="List all macros in a JSON file")
     gc_macros.add_argument("--macro-file", default="macros.json",
+        help="Path to macro JSON file (default: macros.json)")
+
+    gc_save = gc_sub.add_parser("macro-save",
+        help="Record a working input sequence so restarts can replay it",
+        description=(
+            "Save a menu path the moment it is known to work. Every rtx.conf\n"
+            "change costs a game restart, so an unrecorded path gets\n"
+            "rediscovered input by input every time.\n\n"
+            "Example:\n"
+            "  python -m livetools gamectl macro-save title_to_gameplay \\\n"
+            "    --steps \"RETURN WAIT:1500 DOWN DOWN RETURN WAIT:3000\" \\\n"
+            "    --description \"title -> first level, camera at spawn\" \\\n"
+            "    --macro-file patches/MyGame/macros.json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    gc_save.add_argument("macro_name", help="Macro key to write")
+    gc_save.add_argument("--steps", required=True,
+        help="Token sequence in `keys` syntax (KEY, WAIT:ms, HOLD:KEY:ms, CHORD:A+B)")
+    gc_save.add_argument("--description", default=None,
+        help="What this path does and where it ends up")
+    gc_save.add_argument("--macro-file", default="macros.json",
         help="Path to macro JSON file (default: macros.json)")
 
     # -- screenshot --
@@ -1286,7 +1643,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  python -m livetools screenshot grab --exe game.exe --out shot.png\n"
             "  python -m livetools screenshot grab --window \"Game\" --full-window\n"
             "  python -m livetools screenshot diff before.png after.png\n"
-            "  python -m livetools screenshot diff f1.png f2.png --threshold 0.02"
+            "  python -m livetools screenshot diff f1.png f2.png --threshold 0.02\n"
+            "  python -m livetools screenshot diff f1.png f2.png --tiles 4x3\n"
+            "  python -m livetools screenshot stats shot.png"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ss_sub = sp.add_subparsers(dest="ss_action")
@@ -1308,6 +1667,98 @@ def build_parser() -> argparse.ArgumentParser:
         help="Changed-pixel ratio at/above which verdict is CHANGED (default: 0.01)")
     ss_diff.add_argument("--tolerance", type=int, default=4,
         help="Per-channel delta still counted as same (default: 4)")
+    ss_diff.add_argument("--expect", choices=("changed", "unchanged"),
+        default="changed",
+        help="What a pass looks like here. Navigation expects `changed` (the "
+             "input did something); a hash-flicker or regression check expects "
+             "`unchanged`. Exit 3 means the observation did not match "
+             "(default: changed)")
+    ss_diff.add_argument("--tiles", metavar="COLSxROWS", default=None,
+        help="Also report per-region ratios on a grid, e.g. 4x3 — localizes "
+             "change to HUD vs world")
+
+    ss_stats = ss_sub.add_parser("stats",
+        help="Classify one capture: black / blank / flat / content")
+    ss_stats.add_argument("file", help="PNG to analyze")
+    ss_stats.add_argument("--stride", type=int, default=4,
+        help="Sample every Nth pixel per axis (default: 4)")
+
+    # -- health --
+    sp = sub.add_parser("health",
+        help="Is the game running, responding, rendering, or crashed?",
+        description=(
+            "One probe, one verdict: not-running / crashed / no-window /\n"
+            "hung / not-rendering / frozen / ok.\n\n"
+            "This is the watchdog an unattended run calls at the top of every\n"
+            "iteration — each verdict maps to a different recovery, and they\n"
+            "are indistinguishable from a screenshot alone.\n\n"
+            "Examples:\n"
+            "  python -m livetools health --exe game.exe\n"
+            "  python -m livetools health --exe game.exe -d \"C:/Games/MyGame\"\n"
+            "  python -m livetools health --exe game.exe --wait 60\n"
+            "  python -m livetools health --exe game.exe --frozen-check 2.0\n"
+            "  python -m livetools health --exe game.exe --dismiss-dialogs"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp.add_argument("--exe", "-e", required=True,
+        help="Game executable name (e.g. game.exe)")
+    sp.add_argument("--game-dir", "-d", default=None,
+        help="Game directory — enables Remix/dxvk log scanning for fatals")
+    sp.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
+        help="First wait up to N seconds for the game window to appear")
+    sp.add_argument("--frozen-check", type=float, default=0.0, metavar="SECONDS",
+        help="Capture two frames N seconds apart; matching frames = frozen")
+    sp.add_argument("--frozen-ratio", type=float, default=None, metavar="RATIO",
+        help="Changed-pixel ratio under which those frames count as the same "
+             "(default: the renderer noise floor)")
+    sp.add_argument("--dismiss-dialogs", action="store_true",
+        help="Close any error dialogs found (they block all later input)")
+
+    # -- proc --
+    sp = sub.add_parser("proc",
+        help="Game process lifecycle: start, stop, restart, keep-awake",
+        description=(
+            "rtx.conf is read at launch, so every Remix setting change costs a\n"
+            "restart. restart stops the old instance (gracefully, then hard),\n"
+            "launches the exe, and waits for its window before returning.\n\n"
+            "keep-awake blocks Windows sleep and display blanking for the\n"
+            "length of an overnight run — a slept machine stops delivering\n"
+            "input and captures black.\n\n"
+            "Examples:\n"
+            "  python -m livetools proc status --exe game.exe\n"
+            "  python -m livetools proc stop --exe game.exe\n"
+            "  python -m livetools proc restart \"C:/Games/MyGame/game.exe\"\n"
+            "  python -m livetools proc keep-awake --duration 43200"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    pc_sub = sp.add_subparsers(dest="proc_action")
+
+    pc_status = pc_sub.add_parser("status", help="List instances and the windowed one")
+    pc_status.add_argument("--exe", "-e", required=True)
+
+    pc_stop = pc_sub.add_parser("stop", help="Close every instance of the game")
+    pc_stop.add_argument("--exe", "-e", required=True)
+    pc_stop.add_argument("--timeout", type=float, default=15.0,
+        help="Seconds to wait for a graceful exit (default: 15)")
+    pc_stop.add_argument("--no-force", action="store_true",
+        help="Report survivors instead of terminating them")
+
+    pc_start = pc_sub.add_parser("start", help="Launch the game and wait for its window")
+    pc_start.add_argument("exe_path", help="Full path to the executable")
+    pc_start.add_argument("--wait", type=float, default=60.0,
+        help="Seconds to wait for the window (default: 60)")
+
+    pc_restart = pc_sub.add_parser("restart", help="Stop, relaunch, verify")
+    pc_restart.add_argument("exe_path", help="Full path to the executable")
+    pc_restart.add_argument("--wait", type=float, default=90.0,
+        help="Seconds to wait for the new window (default: 90)")
+    pc_restart.add_argument("--timeout", type=float, default=15.0,
+        help="Seconds to wait for a graceful exit (default: 15)")
+
+    pc_awake = pc_sub.add_parser("keep-awake",
+        help="Block sleep/display blanking (blocks; run in background)")
+    pc_awake.add_argument("--duration", type=float, default=43200.0,
+        help="Seconds to hold the request (default: 12 hours)")
 
     # -- remix --
     sp = sub.add_parser("remix",
@@ -1343,9 +1794,19 @@ def build_parser() -> argparse.ArgumentParser:
     def _conf_leaf(name: str, help_text: str) -> argparse.ArgumentParser:
         leaf = rxc_sub.add_parser(name, help=help_text)
         leaf.add_argument("--game-dir", "-d", required=True,
-            help="Game directory containing rtx.conf")
+            help="Game directory containing the config files")
+        leaf.add_argument("--surface", choices=("rtx", "dxvk", "bridge"),
+            default="rtx",
+            help="Which config file to edit: rtx.conf (renderer, default), "
+                 "dxvk.conf (D3D9 layer — exclusive fullscreen), or "
+                 "bridge.conf (32-bit bridge — forced windowed, DirectInput "
+                 "forwarding)")
         leaf.add_argument("--no-backup", action="store_true",
             help="Skip the timestamped rtx.conf backup before writing")
+        leaf.add_argument("--backup-dir", default=None,
+            help="Where backups go (default: rtx-remix-backups/ in the game "
+                 "directory; point it at patches/<Game>/backups to keep run "
+                 "history with the project)")
         return leaf
 
     rxc_get = _conf_leaf("get", "Print one option or all options")
@@ -1354,12 +1815,17 @@ def build_parser() -> argparse.ArgumentParser:
     rxc_set = _conf_leaf("set", "Set an option (idempotent)")
     rxc_set.add_argument("key", help="Option name, e.g. rtx.fallbackLightMode")
     rxc_set.add_argument("value", help="Value written verbatim")
+    rxc_set.add_argument("--force", action="store_true",
+        help="Write a key the option reference does not know (a newer runtime "
+             "may have added it — run 'remix options sync' first)")
     rxc_unset = _conf_leaf("unset", "Remove an option")
     rxc_unset.add_argument("key", help="Option name to remove")
     rxc_add = _conf_leaf("add-hash",
         "Append a hash to a hash-set option (e.g. rtx.uiTextures)")
     rxc_add.add_argument("key", help="Hash-set option name")
     rxc_add.add_argument("hash", help="Hash value, e.g. 0x1234ABCD")
+    rxc_add.add_argument("--force", action="store_true",
+        help="Write to an option the reference does not list as a hash set")
     rxc_rem = _conf_leaf("remove-hash",
         "Remove a hash from a hash-set option")
     rxc_rem.add_argument("key", help="Hash-set option name")
@@ -1375,6 +1841,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Game directory containing rtx.conf")
     rxp_apply.add_argument("--no-backup", action="store_true",
         help="Skip the timestamped rtx.conf backup before writing")
+    rxp_apply.add_argument("--backup-dir", default=None,
+        help="Where backups go (default: rtx-remix-backups/ in the game dir)")
 
     rx_menu = rx_sub.add_parser("menu",
         help="Toggle the Remix developer menu (sends ALT+X chord)")
@@ -1394,6 +1862,71 @@ def build_parser() -> argparse.ArgumentParser:
     rx_log.add_argument("--errors", action="store_true",
         help="Only lines containing err/warn")
 
+    rx_capture = rx_sub.add_parser("capture",
+        help="Take USD captures and read the asset hashes they export",
+        description=(
+            "A capture is the unattended way to get the texture, material and\n"
+            "mesh hashes that rtx.conf hash-set options need — the developer\n"
+            "menu shows the same hashes but only to a human clicking through\n"
+            "the texture tabs.\n\n"
+            "  remix preset apply capture-ready -d DIR   (then restart)\n"
+            "  remix capture trigger -d DIR --exe game.exe\n"
+            "  remix capture assets -d DIR\n"
+            "  remix conf add-hash rtx.uiTextures 0x<hash> -d DIR"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    rxc_sub = rx_capture.add_subparsers(dest="capture_action")
+
+    rxc_list = rxc_sub.add_parser("list", help="List captures, newest last")
+    rxc_list.add_argument("--game-dir", "-d", required=True)
+
+    rxc_trigger = rxc_sub.add_parser("trigger",
+        help="Send the capture hotkey and wait for the stage to be written")
+    rxc_trigger.add_argument("--game-dir", "-d", required=True)
+    rxc_trigger.add_argument("--exe", "-e", default=None,
+        help="Target process exe name")
+    rxc_trigger.add_argument("--window", "-w", default=None,
+        help="Window title substring fallback")
+    rxc_trigger.add_argument("--chord", default="CTRL+SHFT+Q",
+        help="Capture hotkey (default: CTRL+SHFT+Q, matches rtx.captureHotKey)")
+    rxc_trigger.add_argument("--timeout", type=float, default=30.0,
+        help="Seconds to wait for the capture to finish writing (default: 30)")
+
+    rxc_assets = rxc_sub.add_parser("assets",
+        help="List asset hashes exported by captures, ready to tag")
+    rxc_assets.add_argument("--game-dir", "-d", required=True)
+    rxc_assets.add_argument("--limit", type=int, default=40,
+        help="Entries printed per category (default: 40)")
+
+    rx_options = rx_sub.add_parser("options",
+        help="Search the full dxvk-remix option reference (offline)",
+        description=(
+            "Remix exposes ~1000 rtx.conf options and ignores unknown keys\n"
+            "silently. This is the offline table used to validate a key before\n"
+            "writing it and to find settings the playbook does not cover.\n\n"
+            "Examples:\n"
+            "  python -m livetools remix options search terrain\n"
+            "  python -m livetools remix options search \"ghost\"\n"
+            "  python -m livetools remix options show rtx.uniqueObjectDistance\n"
+            "  python -m livetools remix options sync   (refresh from upstream)"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    rxo_sub = rx_options.add_subparsers(dest="options_action")
+
+    rxo_search = rxo_sub.add_parser("search",
+        help="Find options by name or description")
+    rxo_search.add_argument("term")
+    rxo_search.add_argument("--limit", type=int, default=20,
+        help="Maximum results (default: 20)")
+
+    rxo_show = rxo_sub.add_parser("show", help="Full detail for one option")
+    rxo_show.add_argument("name")
+
+    rxo_sync = rxo_sub.add_parser("sync",
+        help="Regenerate the table from dxvk-remix RtxOptions.md")
+    rxo_sync.add_argument("--source", default=None,
+        help="URL or local path to RtxOptions.md (default: dxvk-remix main)")
+
     rx_sub.add_parser("debugviews",
         help="List known debug view indices (rtx.debugView.debugViewIdx values)")
 
@@ -1402,17 +1935,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 # ── main ───────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Dispatch a subcommand.
+
+    Args:
+        argv: Argument list; defaults to sys.argv[1:].
+
+    Returns:
+        The handler's exit code. Handlers that report a failure return
+        non-zero so an unattended loop can branch on it instead of parsing
+        prose out of stdout; handlers that return None exit 0.
+    """
     import sys
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command is None:
         parser.print_help()
-        return
+        return 0
 
     dispatch = {
         "attach": cmd_attach,
@@ -1441,15 +1984,18 @@ def main() -> None:
         "analyze": cmd_analyze,
         "gamectl": cmd_gamectl,
         "screenshot": cmd_screenshot,
+        "health": cmd_health,
+        "proc": cmd_proc,
         "remix": cmd_remix,
     }
 
     handler = dispatch.get(args.command)
-    if handler:
-        handler(args)
-    else:
+    if not handler:
         parser.print_help()
+        return 2
+    return handler(args) or 0
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())

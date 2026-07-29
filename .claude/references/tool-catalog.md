@@ -65,7 +65,7 @@ Everything else. Tell the subagent WHAT you need, not HOW to run it — it has t
 - "Who writes to this memory address?" → `livetools memwatch`
 - "Send keys/clicks to the game window?" → `livetools gamectl` (chords via `key ALT+X` or `CHORD:ALT+X` token)
 - "What does the game look like right now?" → `livetools screenshot grab` (window → PNG; no Frida)
-- "Did the screen change / is the render flickering?" → `livetools screenshot diff` (changed-pixel ratio + bbox)
+- "Did the screen change / is the render flickering?" → `livetools screenshot diff --expect changed|unchanged` (exit 3 = not what you expected; the same command means opposite things when navigating vs testing for flicker)
 - "Is Remix installed / what's in rtx.conf / what do the logs say?" → `livetools remix status` / `remix log` (no Frida)
 - "Change an RTX Remix setting (debug view, fallback light, hash rule, texture tags)?" → `livetools remix conf set|add-hash` or `remix preset apply` (see `.claude/references/remix-compat-catalog.md`)
 - "Open the Remix dev menu?" → `livetools remix menu` (ALT+X chord)

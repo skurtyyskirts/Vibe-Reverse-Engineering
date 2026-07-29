@@ -203,3 +203,38 @@ def test_every_preset_value_passes_its_own_validation():
         for key, value in preset["options"].get("rtx", {}).items():
             problem = rtx_options.validate_value(key, value)
             assert problem is None, f"preset {name}: {key} {problem}"
+
+
+#: Presets whose whole job is restoring runtime defaults — writing a default
+#: is the point, not a mistake.
+_RESTORE_PRESETS = {"debug-off", "hash-default", "anticulling-off",
+                    "fallback-light-off"}
+
+
+def test_no_preset_is_silently_a_no_op():
+    # A preset every one of whose values equals the option's default changes
+    # nothing when applied, while the playbook presents it as a fix — the
+    # attempt budget gets spent on an action that could not have worked.
+    from livetools.remixctl import PRESETS
+
+    for name, preset in PRESETS.items():
+        if name in _RESTORE_PRESETS:
+            continue
+        rtx = preset["options"].get("rtx")
+        if not rtx:
+            continue
+        assert any(
+            (entry := rtx_options.lookup(key)) is None
+            or entry["default"].strip() != value.strip()
+            for key, value in rtx.items()
+        ), f"preset {name} only writes runtime defaults — applying it is a no-op"
+
+
+def test_hash_set_options_are_derived_from_the_table_not_hand_listed():
+    from livetools import remixctl
+
+    derived = {name for name, entry in rtx_options.load().items()
+               if "hash" in entry["type"].lower()}
+    assert remixctl.HASH_SET_OPTIONS == derived
+    # The hand-maintained fallback had already drifted out of date.
+    assert "rtx.rayPortalModelTextureHashes" in remixctl.HASH_SET_OPTIONS

@@ -136,6 +136,7 @@ class PortRun:
             "gates": {},
             "next_action": "Phase 0 preflight: verify_install.py, remix status",
             "attempts": {},
+            "crashes": {},
             "issues": [],
             "shot_seq": 0,
             "steps": 0,
@@ -217,6 +218,8 @@ class PortRun:
             raise ValueError(f"Phase {index} needs gate evidence to complete")
         self.data["phases"][str(index)] = "done"
         self.data["gates"][str(index)] = {"evidence": gate, "at": _now()}
+        # Progress means the crashes around this work are behind us.
+        self.data.get("crashes", {}).pop(str(index), None)
         nxt = next((i for i in sorted(PHASES)
                     if self.data["phases"].get(str(i)) in ("pending", "in_progress")),
                    index)
@@ -305,6 +308,29 @@ class PortRun:
         return {"key": key, "attempts": self.attempts(key) if key else 0,
                 "exhausted": self.exhausted(key) if key else False}
 
+    def record_crash(self, verdict: str) -> int:
+        """Count a crash against the current phase.
+
+        Separate from the attempt budget on purpose. That budget tracks
+        whether *the relaunch* worked, and a successful relaunch clears it —
+        so a game that relaunches perfectly and dies again five minutes later
+        resets the counter every time and loops until morning. This count only
+        clears when a phase actually completes, so repeated crashes around one
+        piece of work are visible however well recovery goes.
+
+        Returns:
+            Crashes recorded since the last completed phase.
+        """
+        crashes = self.data.setdefault("crashes", {})
+        key = str(self.phase)
+        crashes[key] = int(crashes.get(key, 0)) + 1
+        self.data["last_crash"] = {"verdict": verdict, "at": _now()}
+        self._save()
+        return crashes[key]
+
+    def crashes_this_phase(self) -> int:
+        return int(self.data.get("crashes", {}).get(str(self.phase), 0))
+
     # ── issues ────────────────────────────────────────────────────────────
 
     def add_issue(self, issue_id: str, summary: str, evidence: str = "") -> dict:
@@ -385,6 +411,7 @@ class PortRun:
             "steps": self.data.get("steps", 0),
             "attempts": self.data["attempts"],
             "exhausted_keys": self.exhausted_keys(),
+            "crashes_this_phase": self.crashes_this_phase(),
             "open_issues": self.open_issues(),
             "finished": self.data.get("finished"),
             "root": str(self.root),

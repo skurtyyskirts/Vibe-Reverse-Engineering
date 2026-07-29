@@ -14,7 +14,12 @@
       "Bash(python retools/pyghidra_backend.py status:*)",
       "Bash(python -m livetools:*)",
       "Bash(python -m graphics.directx.dx9.tracer:*)",
-      "Bash(python rtx_remix_tools/dx/scripts/:*)"
+      "Bash(python rtx_remix_tools/dx/scripts/:*)",
+      "Bash(python -m autonomy:*)",
+      "Bash(python -m retools.kb:*)",
+      "Bash(python -m retools.index:*)",
+      "Bash(python -m retools.query:*)",
+      "Bash(python -m retools.ghidra_server:*)"
     ]
   }
 }

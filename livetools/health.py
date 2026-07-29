@@ -8,10 +8,14 @@ Each needs a different response, so each needs to be distinguishable.
 
 `check` collapses the probes into one verdict:
 
+    session-locked the desktop is locked or on the secure desktop — input and
+                  capture cannot work at all until it is unlocked
     not-running   no process by that name — launch or relaunch it
     crashed       a crash reporter or an error dialog is up — read it, dismiss it
     no-window     process alive but no top-level window yet — still starting
     hung          window exists but the message loop is not answering
+    runtime-error the runtime logged a fatal condition (device lost, out of
+                  memory) — relaunching reproduces it, so it is a finding
     not-rendering window answers but the frame is black/blank — capture path
                   or renderer is broken, navigation logic will not help
     frozen        frames answer and are identical across the freeze window
@@ -55,9 +59,16 @@ FATAL_LOG_MARKERS = ("device lost", "device removed", "failed to create",
                      "out of memory", "unrecoverable", "fatal",
                      "unsupported adapter", "d3derr", "vk_error")
 
+#: Changed-pixel ratio below which two captures a moment apart are the same
+#: frame. Exact equality never fires on a real renderer — dithering, temporal
+#: accumulation and upscaler jitter move pixels every frame — so testing for
+#: zero meant `frozen` could not be reported at all.
+FROZEN_RATIO = 1e-4
+
 SMTO_ABORTIFHUNG = 0x0002
 WM_NULL = 0x0000
 WM_CLOSE = 0x0010
+DESKTOP_READOBJECTS = 0x0001
 
 
 def _require_windows() -> None:
@@ -138,11 +149,35 @@ def error_windows(pid: int) -> list[dict]:
     return found
 
 
+def desktop_available() -> bool:
+    """Whether an interactive desktop is present to receive input.
+
+    A locked workstation or an active secure desktop (UAC) silently swallows
+    every keystroke and captures black — which looks exactly like a broken
+    port, and is the one failure no amount of relaunching fixes.
+
+    Raises:
+        OSError: If not on Windows.
+    """
+    _require_windows()
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    handle = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
+    if not handle:
+        return False
+    user32.CloseDesktop(handle)
+    return True
+
+
 def crash_reporters() -> list[dict]:
     """List running Windows crash-reporter processes.
 
     A WerFault window is the clearest signal a game died rather than hung —
-    it outlives the game process, so it is often the only evidence left.
+    it outlives the game process, so it is often the only evidence left. It is
+    not proof on its own: an unrelated application crashing elsewhere on the
+    machine starts one too, which is why `verdict_for` only trusts it once the
+    game itself looks absent or unresponsive.
 
     Returns:
         List of {pid, exe}.
@@ -236,27 +271,48 @@ def verdict_for(probes: dict) -> tuple[str, str]:
     it also has no window, and a black frame is worth reporting even though
     the window is responding.
 
+    A crash reporter is only evidence once the game itself looks gone or
+    unresponsive: WerFault is machine-wide, so an unrelated application dying
+    elsewhere would otherwise make a perfectly healthy game verdict `crashed`
+    and get it killed and relaunched.
+
     Args:
         probes: dict with keys `pid`, `hwnd`, `responding`, `error_windows`,
-            `crash_reporters`, `frame` (a `classify_frame` result or None) and
-            `frozen` (bool or None).
+            `crash_reporters`, `desktop`, `fatal_log_lines`, `frame` (a
+            `classify_frame` result or None) and `frozen` (bool or None).
 
     Returns:
         (verdict, reason)
     """
-    if probes.get("crash_reporters"):
-        exes = ", ".join(c["exe"] for c in probes["crash_reporters"])
-        return "crashed", f"crash reporter running ({exes})"
+    if probes.get("desktop") is False:
+        return ("session-locked",
+                "no interactive desktop — input and capture cannot work until "
+                "the session is unlocked")
     if probes.get("error_windows"):
         titles = "; ".join(w["title"] or w["class_name"]
                            for w in probes["error_windows"])
         return "crashed", f"error dialog up: {titles}"
+
+    reporters = probes.get("crash_reporters")
     if not probes.get("pid"):
+        if reporters:
+            exes = ", ".join(c["exe"] for c in reporters)
+            return "crashed", f"process gone, crash reporter running ({exes})"
         return "not-running", "no process with that executable name"
     if not probes.get("hwnd"):
         return "no-window", f"pid {probes['pid']} alive but no top-level window"
     if probes.get("responding") is False:
+        if reporters:
+            exes = ", ".join(c["exe"] for c in reporters)
+            return "crashed", f"window unresponsive, crash reporter up ({exes})"
         return "hung", "window exists but did not answer WM_NULL"
+
+    fatal = probes.get("fatal_log_lines")
+    if fatal:
+        # The runtime already said what went wrong. Relaunching reproduces it,
+        # so this is a finding about the port, not something to recover from.
+        return "runtime-error", fatal[0]
+
     frame = probes.get("frame")
     if frame and not frame.get("usable", True):
         return "not-rendering", f"frame is {frame['verdict']}: {frame['reason']}"
@@ -266,15 +322,18 @@ def verdict_for(probes: dict) -> tuple[str, str]:
 
 
 def check(exe: str, game_dir: str | Path | None = None,
-          frozen_check: float = 0.0, dismiss_dialogs: bool = False) -> dict:
+          frozen_check: float = 0.0, dismiss_dialogs: bool = False,
+          frozen_ratio: float = FROZEN_RATIO) -> dict:
     """Probe a game's health and reduce it to one actionable verdict.
 
     Args:
         exe:             Executable name, e.g. `game.exe`.
         game_dir:        Directory holding rtx.conf/logs; enables log scanning.
         frozen_check:    If > 0, capture two frames this many seconds apart and
-                         report whether they are identical.
+                         report whether they are the same frame.
         dismiss_dialogs: Close any error dialogs found, and re-probe after.
+        frozen_ratio:    Changed-pixel ratio under which those two captures
+                         count as the same frame.
 
     Returns:
         dict with `verdict`, `reason`, and every raw probe result.
@@ -289,7 +348,7 @@ def check(exe: str, game_dir: str | Path | None = None,
     pid = gc.find_pid(exe)
     hwnd = gc.find_hwnd_by_exe(exe) if pid else None
     probes: dict = {
-        "exe": exe, "pid": pid, "hwnd": hwnd,
+        "exe": exe, "pid": pid, "hwnd": hwnd, "desktop": desktop_available(),
         "responding": window_responding(hwnd) if hwnd else None,
         "error_windows": error_windows(pid) if pid else [],
         "crash_reporters": crash_reporters(),
@@ -312,7 +371,7 @@ def check(exe: str, game_dir: str | Path | None = None,
                 if (w2, h2) == (width, height):
                     delta = ss.diff_rgb(width, height, rgb, rgb2)
                     probes["freeze_ratio"] = delta["ratio"]
-                    probes["frozen"] = delta["changed"] == 0
+                    probes["frozen"] = delta["ratio"] < frozen_ratio
         except OSError as e:
             probes["capture_error"] = str(e)
 

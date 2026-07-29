@@ -26,6 +26,10 @@ from pathlib import Path
 
 #: Verdicts a relaunch can fix. A hung game is killed first; a crashed one is
 #: already gone or is sitting behind a dialog that gets dismissed.
+#:
+#: Deliberately excludes `runtime-error` (the runtime said what went wrong, so
+#: a relaunch reproduces it), `session-locked` (nothing to do with the game)
+#: and `not-rendering` (the capture path or the renderer is broken).
 RELAUNCHABLE = ("not-running", "crashed", "hung", "frozen")
 
 #: Consecutive relaunches before the loop stops treating this as a blip. The
@@ -65,6 +69,7 @@ def supervise(run, recover: bool = True) -> dict:
     result = {"verdict": state["verdict"], "reason": state["reason"],
               "action": "none", "recovered": None,
               "healthy": state["verdict"] == "ok", "crash_loop": False,
+              "crashes_this_phase": run.crashes_this_phase(),
               "fatal_log_lines": state["fatal_log_lines"]}
 
     if result["healthy"] or not recover:
@@ -83,20 +88,32 @@ def supervise(run, recover: bool = True) -> dict:
                      evidence=result["reason"], conclusion="game usable again")
             return result
 
+    if state["verdict"] == "runtime-error":
+        run.add_issue(f"runtime-error:{run.phase}", state["reason"],
+                      evidence="; ".join(state["fatal_log_lines"][:3]))
+        result["action"] = "reported"
+        return result
+
     if state["verdict"] not in RELAUNCHABLE:
         return result
 
+    crashes = run.record_crash(state["verdict"])
     attempt = run.step(action=f"watchdog relaunching after {state['verdict']}",
                        outcome="fail", key=CRASH_KEY,
                        evidence="; ".join(state["fatal_log_lines"][:3])
                                 or state["reason"],
                        conclusion=state["reason"])
-    if attempt["attempts"] >= CRASH_LOOP_LIMIT:
+    result["crashes_this_phase"] = crashes
+    # Either counter tripping ends the loop: the relaunch keeps failing, or
+    # the relaunch keeps working and the game keeps dying.
+    if attempt["attempts"] >= CRASH_LOOP_LIMIT or crashes >= CRASH_LOOP_LIMIT:
         result.update(action="crash-loop", crash_loop=True)
         run.add_issue("crash-loop",
-                      f"game reached {state['verdict']} "
-                      f"{attempt['attempts']} times in a row",
-                      evidence="; ".join(state["fatal_log_lines"][:3]))
+                      f"game reached {state['verdict']} {crashes} time(s) "
+                      f"during phase {run.phase} "
+                      f"({attempt['attempts']} failed relaunch(es))",
+                      evidence="; ".join(state["fatal_log_lines"][:3])
+                               or state["reason"])
         return result
 
     exe_path = Path(game_dir) / exe

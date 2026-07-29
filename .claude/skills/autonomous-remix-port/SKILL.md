@@ -151,9 +151,9 @@ Goal: a repeatable in-level viewpoint (menus don't exercise the 3D pipeline).
 
 1. Screenshot, Read it, identify the current screen.
 2. Send ONE input: `livetools gamectl --exe <exe> keys "..."` / `click X Y`.
-3. Screenshot again; `screenshot diff a.png b.png` confirms it changed (exit 3
-   = nothing happened, that input does nothing here). `--tiles 4x3` localizes
-   *where* it changed. Read the new image to see where you landed. Dead end →
+3. Screenshot again; `screenshot diff a.png b.png --expect changed` confirms
+   it did something (exit 3 = nothing happened, that input does nothing here).
+   `--tiles 4x3` localizes *where* it changed. Read the new image to see where you landed. Dead end →
    `ESCAPE` back, try the next candidate.
 4. **Record every transition that works, immediately:**
    ```bash
@@ -210,10 +210,15 @@ never bit-identical frame to frame (dithering, temporal accumulation, upscaler
 jitter), so a raw ratio means nothing without knowing what "no change" costs on
 this game:
 
-1. Debug view **off**, camera still, two screenshots 1s apart, `screenshot
-   diff` → that ratio is the floor.
+1. Debug view **off**, camera still, two screenshots 1s apart,
+   `screenshot diff a.png b.png --expect unchanged` → that ratio is the floor.
 2. `remix preset apply debug-geometry-hash`, restart, replay the macro, two
-   screenshots 1s apart, `screenshot diff` again.
+   screenshots 1s apart, `screenshot diff --expect unchanged` again.
+
+**Always pass `--expect`.** The same command means opposite things in Phase 3
+and Phase 5: navigation wants the screen to change, a flicker test wants it
+not to. Exit 3 then means "not what you expected" in both, instead of meaning
+"changed" in one and "did not change" in the other.
 
 Hashes are unstable when the second ratio is clearly above the floor, not when
 it is above a fixed constant. `--tiles 4x3` says whether the churn is HUD or
@@ -226,7 +231,9 @@ image).
 Fix by finding-category (details: `.claude/references/remix-compat-catalog.md`):
 - up-draws / dynamic VBs / vb-churn → `remix preset apply hash-stable-anim`
 - pretransformed HUD draws → tag `rtx.uiTextures` (Phase 7 tagging loop)
-- programmable-vs draws → `rtx.useVertexCapture = True`, else Phase 6
+- programmable-vs draws → vertex capture is already on by default; the knob
+  that is not is `rtx.useVertexCapturedTexcoords` (preset `vertex-capture`),
+  for shader-animated UVs. If capture is genuinely insufficient, Phase 6
 - flickering signatures → `rtx.uniqueObjectDistance` tuning
 
 Re-run the flicker test after every fix. Gate: diff ratio below threshold on

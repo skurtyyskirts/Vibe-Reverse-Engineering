@@ -82,7 +82,12 @@ DEBUG_VIEWS = {
 
 # Hash-set options (comma-separated 0x hashes). Used by add-hash/remove-hash
 # validation and by the compat playbook.
-HASH_SET_OPTIONS = frozenset({
+#
+# The option reference already carries this as a column, so the authoritative
+# set is derived from it; this literal is the fallback for a checkout with no
+# table. Maintaining it by hand had already let one option drift out
+# (rtx.rayPortalModelTextureHashes), which add-hash then refused to write.
+_FALLBACK_HASH_SET_OPTIONS = frozenset({
     "rtx.animatedWaterTextures", "rtx.antiCulling.antiCullingTextures",
     "rtx.beamTextures", "rtx.decalTextures", "rtx.dynamicDecalTextures",
     "rtx.hairCardTextures", "rtx.hideInstanceTextures",
@@ -98,6 +103,18 @@ HASH_SET_OPTIONS = frozenset({
     "rtx.terrainTextures", "rtx.uiTextures",
     "rtx.worldSpaceUiBackgroundTextures", "rtx.worldSpaceUiTextures",
 })
+
+
+def hash_set_options() -> frozenset[str]:
+    """Every rtx.conf option that takes a list of asset hashes."""
+    from . import rtx_options
+
+    derived = frozenset(name for name, entry in rtx_options.load().items()
+                        if "hash" in entry["type"].lower())
+    return derived or _FALLBACK_HASH_SET_OPTIONS
+
+
+HASH_SET_OPTIONS = hash_set_options()
 
 # Presets: named option bundles for common compatibility/debugging setups.
 # `options` maps config surface -> {option: value}, so one preset can span
@@ -167,11 +184,13 @@ PRESETS: dict[str, dict] = {
         }},
     },
     "vertex-capture": {
-        "description": "Capture shader-transformed vertices for simple "
-                       "vertex-shader games that still set FFP matrices",
+        "description": "Prefer vertex-shader output texcoords when a shader "
+                       "game animates UVs. Vertex capture and captured normals "
+                       "are already on by default — this is the one knob in "
+                       "the family that is not, so it is the only one worth "
+                       "writing.",
         "options": {"rtx": {
-                "rtx.useVertexCapture": "True",
-                "rtx.useVertexCapturedNormals": "True",
+                "rtx.useVertexCapturedTexcoords": "True",
         }},
     },
     "automation": {

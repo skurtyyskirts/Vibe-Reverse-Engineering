@@ -767,9 +767,11 @@ def cmd_screenshot(args: argparse.Namespace) -> int:
         except (OSError, ValueError) as e:
             print(f"[error] {e}")
             return EXIT_FAILED
-        verdict = "CHANGED" if r["ratio"] >= args.threshold else "same"
+        changed = r["ratio"] >= args.threshold
+        verdict = "CHANGED" if changed else "same"
         print(f"{r['changed']}/{r['total']} pixels differ "
-              f"(ratio {r['ratio']:.4f}, threshold {args.threshold}) -> {verdict}")
+              f"(ratio {r['ratio']:.4f}, threshold {args.threshold}) -> {verdict}"
+              f"  (expected {args.expect})")
         if r["bbox"]:
             x0, y0, x1, y1 = r["bbox"]
             print(f"  changed region: ({x0},{y0})-({x1},{y1}) "
@@ -789,7 +791,7 @@ def cmd_screenshot(args: argparse.Namespace) -> int:
             hot = grid["hottest"]
             print(f"  hottest: col {hot['col']} row {hot['row']} "
                   f"(ratio {hot['ratio']:.4f})")
-        return 0 if r["ratio"] >= args.threshold else EXIT_NEGATIVE
+        return 0 if changed == (args.expect == "changed") else EXIT_NEGATIVE
 
     if action == "stats":
         try:
@@ -824,7 +826,10 @@ def cmd_health(args: argparse.Namespace) -> int:
     try:
         state = hl.check(args.exe, game_dir=args.game_dir,
                          frozen_check=args.frozen_check,
-                         dismiss_dialogs=args.dismiss_dialogs)
+                         dismiss_dialogs=args.dismiss_dialogs,
+                         frozen_ratio=(args.frozen_ratio
+                                       if args.frozen_ratio is not None
+                                       else hl.FROZEN_RATIO))
     except OSError as e:
         print(f"[error] {e}")
         return EXIT_FAILED
@@ -1662,6 +1667,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Changed-pixel ratio at/above which verdict is CHANGED (default: 0.01)")
     ss_diff.add_argument("--tolerance", type=int, default=4,
         help="Per-channel delta still counted as same (default: 4)")
+    ss_diff.add_argument("--expect", choices=("changed", "unchanged"),
+        default="changed",
+        help="What a pass looks like here. Navigation expects `changed` (the "
+             "input did something); a hash-flicker or regression check expects "
+             "`unchanged`. Exit 3 means the observation did not match "
+             "(default: changed)")
     ss_diff.add_argument("--tiles", metavar="COLSxROWS", default=None,
         help="Also report per-region ratios on a grid, e.g. 4x3 — localizes "
              "change to HUD vs world")
@@ -1696,7 +1707,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--wait", type=float, default=0.0, metavar="SECONDS",
         help="First wait up to N seconds for the game window to appear")
     sp.add_argument("--frozen-check", type=float, default=0.0, metavar="SECONDS",
-        help="Capture two frames N seconds apart; identical frames = frozen")
+        help="Capture two frames N seconds apart; matching frames = frozen")
+    sp.add_argument("--frozen-ratio", type=float, default=None, metavar="RATIO",
+        help="Changed-pixel ratio under which those frames count as the same "
+             "(default: the renderer noise floor)")
     sp.add_argument("--dismiss-dialogs", action="store_true",
         help="Close any error dialogs found (they block all later input)")
 

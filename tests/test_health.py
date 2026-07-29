@@ -3,7 +3,7 @@ import pytest
 from livetools.health import FATAL_LOG_MARKERS, fatal_log_lines, verdict_for
 
 HEALTHY = {"crash_reporters": [], "error_windows": [], "pid": 42, "hwnd": 7,
-           "responding": True,
+           "responding": True, "desktop": True, "fatal_log_lines": [],
            "frame": {"usable": True, "verdict": "content", "reason": "ok"},
            "frozen": False}
 
@@ -16,12 +16,46 @@ def test_healthy_game_is_ok():
     assert verdict_for(probes())[0] == "ok"
 
 
-def test_crash_reporter_outranks_everything_else():
-    # WerFault outlives the game, so every other probe reads "not running".
+def test_a_crash_reporter_over_a_dead_process_is_a_crash():
+    # WerFault outlives the game, so it is often the only evidence left.
     verdict, reason = verdict_for(probes(crash_reporters=[{"exe": "WerFault.exe"}],
                                          pid=None, hwnd=None))
     assert verdict == "crashed"
     assert "WerFault" in reason
+
+
+def test_an_unrelated_crash_reporter_does_not_condemn_a_healthy_game():
+    # WerFault is machine-wide. Trusting it unconditionally would kill and
+    # relaunch a game that is running perfectly.
+    assert verdict_for(probes(
+        crash_reporters=[{"exe": "WerFault.exe"}]))[0] == "ok"
+
+
+def test_a_crash_reporter_over_an_unresponsive_window_is_a_crash():
+    verdict, _ = verdict_for(probes(responding=False,
+                                    crash_reporters=[{"exe": "WerFault.exe"}]))
+    assert verdict == "crashed"
+
+
+def test_a_locked_session_outranks_everything():
+    verdict, reason = verdict_for(probes(desktop=False, pid=None, hwnd=None))
+    assert verdict == "session-locked"
+    assert "unlock" in reason
+
+
+def test_a_fatal_runtime_log_line_is_not_a_relaunch():
+    verdict, reason = verdict_for(probes(
+        fatal_log_lines=["game_d3d9.log: err: device lost"]))
+    assert verdict == "runtime-error"
+    assert "device lost" in reason
+
+
+def test_runtime_errors_are_not_relaunchable():
+    from autonomy.watchdog import RELAUNCHABLE
+
+    assert "runtime-error" not in RELAUNCHABLE
+    assert "session-locked" not in RELAUNCHABLE
+    assert "not-rendering" not in RELAUNCHABLE
 
 
 def test_error_dialog_is_a_crash_not_a_hang():

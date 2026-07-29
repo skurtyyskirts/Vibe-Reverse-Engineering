@@ -20,7 +20,8 @@ class FakeHealth:
         return {"verdict": verdict, "reason": f"scripted {verdict}",
                 "error_windows": ([{"title": "Error", "class_name": "#32770"}]
                                   if verdict == "crashed" else []),
-                "fatal_log_lines": []}
+                "fatal_log_lines": (["err: device lost"]
+                                    if verdict == "runtime-error" else [])}
 
 
 class FakeProc:
@@ -113,3 +114,31 @@ def test_every_recovery_is_journalled(wired):
     journal = (run.root / "journal.md").read_text()
     assert "watchdog relaunching after hung" in journal
     assert "watchdog relaunched the game" in journal
+
+
+def test_a_game_that_relaunches_fine_but_keeps_dying_still_trips(wired):
+    # The attempt budget clears on a successful relaunch, so on its own it can
+    # never catch a game that recovers every time and dies again minutes later.
+    run, _, proc = wired(["not-running", "ok"] * 6)
+    for _ in range(CRASH_LOOP_LIMIT - 1):
+        assert supervise(run)["action"] == "relaunched"
+        assert run.attempts("watchdog:relaunch") == 0
+    result = supervise(run)
+    assert result["crash_loop"]
+    assert [i["id"] for i in run.open_issues()] == ["crash-loop"]
+
+
+def test_crash_counting_is_per_phase(wired):
+    run, _, _ = wired(["not-running", "ok"] * 6)
+    supervise(run)
+    assert run.crashes_this_phase() == 1
+    run.complete_phase(0, gate="screens/001.png")
+    assert run.crashes_this_phase() == 0
+
+
+def test_a_runtime_error_is_filed_rather_than_relaunched(wired):
+    run, _, proc = wired(["runtime-error"])
+    result = supervise(run)
+    assert result["action"] == "reported"
+    assert proc.restarts == []
+    assert run.open_issues()[0]["id"].startswith("runtime-error:")

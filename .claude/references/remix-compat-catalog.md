@@ -113,8 +113,10 @@ False) overlays the view on the normal image.
 The geometry-hash flicker test (fully scriptable):
 1. `livetools remix preset apply debug-geometry-hash -d <gamedir>` and restart the game.
 2. Hold the camera still; `livetools screenshot grab` twice a second apart.
-3. `livetools screenshot diff a.png b.png` — ratio ≳ 0.01 on a static scene
-   means hashes are churning; cross-check `dx9tracer analyze --hash-stability`.
+3. `livetools screenshot diff a.png b.png --expect unchanged` — measure the
+   noise floor with the debug view off first; a renderer is never bit-identical
+   frame to frame, so a fixed threshold means nothing on its own. Cross-check
+   `dx9tracer analyze --hash-stability`.
 4. `livetools remix preset apply debug-off -d <gamedir>` when done.
 
 ## Fallback Light
@@ -239,8 +241,8 @@ Get hashes from a USD capture (above), the Remix menu texture tabs, or
 |--------|------|---------|---------|
 | `rtx.zUp` | bool | False | Z is world-up (affects terrain baker, player model, atmosphere) |
 | `rtx.sceneScale` | float | 1 | 1cm-per-game-unit ratio; wrong values break light falloff and volumetrics |
-| `rtx.useVertexCapture` | bool | True | Inject into original vertex shaders to capture final positions (shader games that still set FFP matrices) |
-| `rtx.useVertexCapturedNormals` | bool | True | Use input-assembler normals during vertex capture |
+| `rtx.useVertexCapture` | bool | **True** | Inject into original vertex shaders to capture final positions. Already on — "set this to True" is not a fix |
+| `rtx.useVertexCapturedNormals` | bool | **True** | Use input-assembler normals during vertex capture. Also already on |
 | `rtx.useVertexCapturedTexcoords` | bool | False | Prefer VS-output texcoords (shader-animated UVs) |
 | `rtx.skyAutoDetect` | int | 0 | Tag sky by camera heuristic: 0 none, 1 CameraPosition, 2 CameraPosition+DepthFlags. **Needs no texture hashes** — try this before `rtx.skyBoxTextures` |
 | `rtx.skyAutoDetectUniqueCameraDistance` | float | 1 | Distance threshold separating a sky camera from the main camera |
@@ -315,7 +317,7 @@ deterministic; leave them on for the final look check, not for A/B tests.
 | Objects missing from reflections/shadows but visible head-on | Game culled them | `remix preset apply anticulling-on`; widen with `antiCulling.object.fovScale` / `farPlaneScale` |
 | Screenshot diffs never settle on a static scene | Memory readout / upscaler jitter in the image | `remix preset apply automation`; disable frame generation for A/B tests |
 | A setting appears to do nothing | Option name or value silently rejected | `remix conf set` validates both; re-check with `remix conf get` and `remix log --errors` |
-| Geometry present but nothing animates/skins correctly | Shader-transformed vertices not captured | `rtx.useVertexCapture = True`; complex shaders: FFP-convert via remix-comp-proxy (`dx9-ffp-port` skill) |
+| Geometry present but nothing animates/skins correctly | Shader-transformed vertices not captured | Vertex capture is on by default; the non-default knob is `rtx.useVertexCapturedTexcoords` (preset `vertex-capture`) for shader-animated UVs. Complex shaders: FFP-convert via remix-comp-proxy (`dx9-ffp-port` skill) |
 | Fast objects flicker or leave ghost lighting | Object correlation distance | tune `rtx.uniqueObjectDistance` |
 | Double lighting (baked + RT) | Lightmaps still applied | `rtx.lightmapTextures` / `rtx.ignoreBakedLightingTextures`; FFP lightmap-last games: `rtx.ignoreLastTextureStage = True` |
 | Lights too bright/dim after conversion | Legacy intensity mismatch | `rtx.lightConversionIntensityFactor` |

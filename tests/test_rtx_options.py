@@ -112,9 +112,9 @@ def test_shipped_table_covers_the_options_the_playbook_relies_on():
 def test_shipped_table_covers_every_preset_option():
     from livetools.remixctl import PRESETS
 
-    for preset in PRESETS.values():
-        for key in preset["options"]:
-            assert rtx_options.lookup(key), f"preset writes unknown option {key}"
+    for name, preset in PRESETS.items():
+        for key in preset["options"].get("rtx", {}):
+            assert rtx_options.lookup(key), f"preset {name} writes unknown option {key}"
 
 
 def test_shipped_table_covers_every_hash_set_option():
@@ -190,6 +190,6 @@ def test_every_preset_value_passes_its_own_validation():
     from livetools.remixctl import PRESETS
 
     for name, preset in PRESETS.items():
-        for key, value in preset["options"].items():
+        for key, value in preset["options"].get("rtx", {}).items():
             problem = rtx_options.validate_value(key, value)
             assert problem is None, f"preset {name}: {key} {problem}"

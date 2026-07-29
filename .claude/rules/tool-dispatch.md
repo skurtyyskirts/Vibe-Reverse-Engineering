@@ -20,6 +20,7 @@ Run all tools from repo root via `python -m <module>`. **ALWAYS pass `--types pa
 - `python -m retools.asi_patcher build spec.json` — build ASI patch DLL
 - `python retools/pyghidra_backend.py status $B --project $P` — Ghidra project existence check
 - `python -m retools.index status <Game> [--db PATH]` — per-table row counts + schema_version for the game's index.db
+- `python -m retools.kb add|validate|show patches/<Game>/kb.h` — write confirmed findings back into the KB, or find lines a parse would silently drop
 - `python -m retools.query <Game> "SQL" [--db PATH] [--json] [--list-tables] [--schema TABLE]` — read-only SQL over index.db (`callers`/`callees`/`grep` views); prefer this over a fresh xrefs/datarefs/search scan whenever index.db already has the data
 
 ## Delegate to `static-analyzer`

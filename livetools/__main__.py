@@ -919,6 +919,11 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 print(f"  - {m}")
         else:
             print("Remix markers: none found (runtime not detected)")
+        print("Config surfaces:")
+        for surface, cfg in info["configs"].items():
+            state = (f"{cfg['options']} option(s)" if cfg["present"]
+                     else "not present")
+            print(f"  {surface:<7s} {Path(cfg['path']).name:<12s} {state}")
         print(f"rtx.conf:  {info['rtx_conf'] or 'not present'}")
         if info["rtx_conf"]:
             options = rx.load_conf(info["rtx_conf"])
@@ -931,7 +936,7 @@ def cmd_remix(args: argparse.Namespace) -> None:
                 print(f"  {lg['name']:<32s} {lg['size']:>10d} B  {lg['mtime']}")
 
     elif action == "conf":
-        conf = rx.conf_path(args.game_dir)
+        conf = rx.conf_path(args.game_dir, args.surface)
         sub = args.conf_action
         if sub == "get":
             options = rx.load_conf(conf)
@@ -947,6 +952,16 @@ def cmd_remix(args: argparse.Namespace) -> None:
                     print(f"{k} = {options[k]}")
         elif sub == "set":
             from . import rtx_options as ro
+            if args.surface != "rtx":
+                # Only rtx.conf has a generated option reference upstream.
+                bak = rx.set_option(conf, args.key, args.value,
+                                    backup=not args.no_backup,
+                                    backup_dir=args.backup_dir)
+                print(f"{args.key} = {args.value}  written to {conf}")
+                if bak:
+                    print(f"  backup: {bak}")
+                print("  (takes effect on next game launch)")
+                return 0
             if not ro.is_known(args.key) and not args.force:
                 print(f"[error] {args.key} is not a known dxvk-remix option — "
                       "the runtime would ignore it silently.")
@@ -1005,19 +1020,22 @@ def cmd_remix(args: argparse.Namespace) -> None:
         sub = args.preset_action
         if sub == "list":
             for name in sorted(rx.PRESETS):
-                print(f"  {name:<24s}  {rx.PRESETS[name]['description']}")
+                surfaces = "+".join(sorted(rx.PRESETS[name]["options"]))
+                print(f"  {name:<20s} [{surfaces:<11s}] "
+                      f"{rx.PRESETS[name]['description']}")
         elif sub == "apply":
             if args.name not in rx.PRESETS:
                 print(f"[error] Unknown preset '{args.name}'. "
                       f"Available: {', '.join(sorted(rx.PRESETS))}")
                 return
-            conf = rx.conf_path(args.game_dir)
-            options = rx.apply_preset(conf, args.name,
+            applied = rx.apply_preset(args.game_dir, args.name,
                                       backup=not args.no_backup,
                                       backup_dir=args.backup_dir)
-            print(f"Applied preset '{args.name}' to {conf}:")
-            for k, v in options.items():
-                print(f"  {k} = {v}")
+            print(f"Applied preset '{args.name}':")
+            for surface, options in applied["options"].items():
+                print(f"  {applied['paths'][surface]}")
+                for k, v in options.items():
+                    print(f"    {k} = {v}")
             print("  (takes effect on next game launch)")
         else:
             print("Usage: python -m livetools remix preset [list|apply]")
@@ -1741,7 +1759,13 @@ def build_parser() -> argparse.ArgumentParser:
     def _conf_leaf(name: str, help_text: str) -> argparse.ArgumentParser:
         leaf = rxc_sub.add_parser(name, help=help_text)
         leaf.add_argument("--game-dir", "-d", required=True,
-            help="Game directory containing rtx.conf")
+            help="Game directory containing the config files")
+        leaf.add_argument("--surface", choices=("rtx", "dxvk", "bridge"),
+            default="rtx",
+            help="Which config file to edit: rtx.conf (renderer, default), "
+                 "dxvk.conf (D3D9 layer — exclusive fullscreen), or "
+                 "bridge.conf (32-bit bridge — forced windowed, DirectInput "
+                 "forwarding)")
         leaf.add_argument("--no-backup", action="store_true",
             help="Skip the timestamped rtx.conf backup before writing")
         leaf.add_argument("--backup-dir", default=None,

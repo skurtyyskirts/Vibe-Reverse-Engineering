@@ -192,6 +192,54 @@ def check_retools_import():
             record("retools", FAIL, msg)
 
 
+def check_live_and_autonomy_import():
+    """Import the modules an unattended porting run depends on.
+
+    These drive the game and the Remix runtime rather than analyzing a binary,
+    so a broken import here does not surface until a run is already going.
+    """
+    modules = [
+        "livetools.gamectl", "livetools.screenshot", "livetools.remixctl",
+        "livetools.rtx_options", "livetools.health", "livetools.procctl",
+        "livetools.analyze",
+        "autonomy.state", "autonomy.watchdog",
+        "graphics.directx.dx9.tracer.analyze",
+    ]
+    ok, bad = 0, []
+    for mod in modules:
+        try:
+            importlib.import_module(mod)
+            ok += 1
+        except Exception as e:
+            bad.append(f"{mod}: {e}")
+    if not bad:
+        record("livetools+autonomy", PASS, f"all {ok} modules import clean")
+    else:
+        for msg in bad:
+            record("livetools+autonomy", FAIL, msg)
+
+
+def check_rtx_option_table():
+    """The offline rtx.conf option table backs conf validation and search."""
+    try:
+        from livetools import rtx_options
+    except Exception as e:
+        record("rtx-options", FAIL, f"cannot import: {e}")
+        return
+    table = rtx_options.load()
+    if not table:
+        record("rtx-options", WARN,
+               f"{rtx_options.DATA_FILE} missing or empty — rtx.conf keys and "
+               "values will not be validated; run "
+               "'python -m livetools remix options sync'")
+    elif "rtx.uiTextures" not in table:
+        record("rtx-options", WARN,
+               f"{len(table)} options loaded but the table looks incomplete; "
+               "run 'python -m livetools remix options sync'")
+    else:
+        record("rtx-options", PASS, f"{len(table)} rtx.conf options available offline")
+
+
 def _download(url: str, desc: str) -> bytes:
     """Download a URL with progress reporting."""
     from urllib.request import Request
@@ -345,6 +393,8 @@ def main():
     check_pyghidra()
     check_r2_runs()
     check_retools_import()
+    check_live_and_autonomy_import()
+    check_rtx_option_table()
     check_sigdb()
 
     failures = sum(1 for _, s, _ in results if s == FAIL)

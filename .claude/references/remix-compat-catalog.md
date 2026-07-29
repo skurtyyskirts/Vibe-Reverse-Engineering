@@ -25,6 +25,38 @@ python -m livetools remix options sync          # refresh after a runtime upgrad
 `remix conf set` refuses option names and values the table says are wrong —
 the runtime ignores both silently, so a typo otherwise costs a restart to find.
 
+## Config Surfaces
+
+A Remix install reads three key=value files, and the settings that decide
+whether an unattended run can see the game or open the Remix UI are **not** in
+rtx.conf. All three are editable the same way:
+
+```bash
+python -m livetools remix status -d <GAMEDIR>          # which files exist, option counts
+python -m livetools remix conf set --surface dxvk d3d9.enableDialogMode True -d <GAMEDIR>
+python -m livetools remix conf get --surface bridge -d <GAMEDIR>
+```
+
+| Surface | File | Owns |
+|---------|------|------|
+| `rtx` | `rtx.conf` | dxvk-remix renderer options (everything else in this document) |
+| `dxvk` | `dxvk.conf` | the D3D9 layer — exclusive fullscreen, frame pacing, shader model |
+| `bridge` | `bridge.conf` (or `.trex/bridge.conf`) | the 32-bit bridge — forced windowed, DirectInput forwarding, log level |
+
+| Option | Surface | Default | Meaning |
+|--------|---------|---------|---------|
+| `d3d9.enableDialogMode` | dxvk | False | **Disables** exclusive fullscreen — the fix for black GDI screenshots |
+| `d3d9.maxFrameRate` | dxvk | 0 | Cap frame rate (steadier captures) |
+| `d3d9.maxFrameLatency` | dxvk | 0 | Frames of queued latency |
+| `client.forceWindowed` | bridge | False | Force windowed even if the game asks for fullscreen |
+| `client.DirectInput.forward.keyboardPolicy` | bridge | 2 | 0 never, 1 UI inactive, 2 UI active, 3 always. **Set 3 when ALT+X does nothing** — the game is swallowing all key input |
+| `client.DirectInput.forward.mousePolicy` | bridge | 2 | Same scale; lower it if the Remix UI shows two cursors |
+| `client.DirectInput.disableExclusiveInput` | bridge | False | Release DirectInput exclusivity in fullscreen |
+| `logLevel` | bridge | Info | `Debug` when a launch fails with nothing useful in the d3d9 log |
+
+Presets: `windowed-capture` (black screenshots), `menu-input-force` (ALT+X does
+nothing), `verbose-logs` (silent launch failure).
+
 ## Unattended Runs (apply first)
 
 `remix preset apply automation` — Remix's own settings for automation-driven

@@ -92,21 +92,48 @@ def test_remove_last_hash_unsets_option(conf):
     assert "rtx.uiTextures" not in remixctl.load_conf(conf)
 
 
-def test_apply_preset_writes_all_options(conf):
-    applied = remixctl.apply_preset(conf, "hash-stable-anim", backup=False)
-    options = remixctl.load_conf(conf)
-    for key, value in applied.items():
+def test_apply_preset_writes_all_options(tmp_path):
+    applied = remixctl.apply_preset(tmp_path, "hash-stable-anim", backup=False)
+    options = remixctl.load_conf(remixctl.conf_path(tmp_path))
+    for key, value in applied["options"]["rtx"].items():
         assert options[key] == value
 
 
-def test_apply_unknown_preset_raises(conf):
+def test_apply_unknown_preset_raises(tmp_path):
     with pytest.raises(KeyError):
-        remixctl.apply_preset(conf, "no-such-preset", backup=False)
+        remixctl.apply_preset(tmp_path, "no-such-preset", backup=False)
+
+
+def test_a_preset_can_span_several_config_files(tmp_path):
+    # Getting out of exclusive fullscreen needs dxvk.conf and bridge.conf;
+    # neither setting exists in rtx.conf.
+    applied = remixctl.apply_preset(tmp_path, "windowed-capture", backup=False)
+    assert set(applied["options"]) == {"dxvk", "bridge"}
+    assert remixctl.load_conf(tmp_path / "dxvk.conf") == {
+        "d3d9.enableDialogMode": "True"}
+    assert remixctl.load_conf(tmp_path / "bridge.conf") == {
+        "client.forceWindowed": "True"}
+    assert not (tmp_path / "rtx.conf").exists()
+
+
+def test_conf_path_resolves_each_surface(tmp_path):
+    assert remixctl.conf_path(tmp_path, "rtx").name == "rtx.conf"
+    assert remixctl.conf_path(tmp_path, "dxvk").name == "dxvk.conf"
+    assert remixctl.conf_path(tmp_path, "bridge").name == "bridge.conf"
+    with pytest.raises(KeyError):
+        remixctl.conf_path(tmp_path, "nope")
+
+
+def test_an_existing_trex_bridge_conf_is_preferred_over_a_new_one(tmp_path):
+    nested = tmp_path / ".trex"
+    nested.mkdir()
+    (nested / "bridge.conf").write_text("logLevel = Info\n")
+    assert remixctl.conf_path(tmp_path, "bridge") == nested / "bridge.conf"
 
 
 def test_presets_reference_known_debug_views():
     idx = int(remixctl.PRESETS["debug-geometry-hash"]
-              ["options"]["rtx.debugView.debugViewIdx"])
+              ["options"]["rtx"]["rtx.debugView.debugViewIdx"])
     assert idx == remixctl.DEBUG_VIEWS["geometry-hash"]
 
 
@@ -239,5 +266,5 @@ def test_hashes_from_a_capture_are_accepted_by_add_hash(tmp_path):
 
 
 def test_capture_ready_preset_disables_the_menu_prompt():
-    options = remixctl.PRESETS["capture-ready"]["options"]
+    options = remixctl.PRESETS["capture-ready"]["options"]["rtx"]
     assert options["rtx.captureShowMenuOnHotkey"] == "False"

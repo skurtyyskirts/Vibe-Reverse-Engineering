@@ -18,8 +18,10 @@ Usage (CLI):
     python -m livetools remix conf unset rtx.debugView.debugViewIdx --game-dir DIR
     python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD --game-dir DIR
     python -m livetools remix conf remove-hash rtx.uiTextures 0x1234ABCD --game-dir DIR
+    python -m livetools remix conf set --surface dxvk d3d9.enableDialogMode True -d DIR
     python -m livetools remix preset list
     python -m livetools remix preset apply debug-geometry-hash --game-dir DIR
+    python -m livetools remix preset apply windowed-capture --game-dir DIR
     python -m livetools remix menu --exe game.exe
     python -m livetools remix log --game-dir DIR --errors --tail 40
     python -m livetools remix capture trigger --game-dir DIR --exe game.exe
@@ -27,8 +29,8 @@ Usage (CLI):
 
 Usage (library):
     from livetools import remixctl
-    remixctl.set_option(conf_path, "rtx.fallbackLightMode", "2")
-    remixctl.apply_preset(conf_path, "debug-geometry-hash")
+    remixctl.set_option(remixctl.conf_path(game_dir), "rtx.fallbackLightMode", "2")
+    remixctl.apply_preset(game_dir, "debug-geometry-hash")
     remixctl.capture_assets(game_dir)["assets"]["texture"]
 """
 
@@ -39,6 +41,22 @@ import time
 from pathlib import Path
 
 RTX_CONF = "rtx.conf"
+
+#: A Remix install has three key=value config files, not one. The two beyond
+#: rtx.conf own the settings that decide whether an unattended run can see the
+#: game at all (exclusive fullscreen) or open the Remix UI (DirectInput games
+#: that swallow the hotkey), so they are editable through the same commands.
+#: Paths are relative to the game directory.
+CONF_SURFACES = {
+    "rtx": RTX_CONF,          # dxvk-remix renderer options
+    "dxvk": "dxvk.conf",      # DXVK/D3D9 layer options
+    "bridge": "bridge.conf",  # 32-bit bridge client/server options
+}
+
+#: bridge.conf ships inside .trex/ in some layouts and beside the exe in
+#: others; whichever exists wins, and a new file is created at the primary
+#: location.
+_BRIDGE_ALT = Path(".trex") / "bridge.conf"
 
 # Remix developer menu hotkey (rtx.remixMenuKeyBinds default: ALT,X)
 MENU_CHORD = "ALT+X"
@@ -82,27 +100,28 @@ HASH_SET_OPTIONS = frozenset({
 })
 
 # Presets: named option bundles for common compatibility/debugging setups.
-# Each maps option -> value; apply_preset writes them all.
+# `options` maps config surface -> {option: value}, so one preset can span
+# rtx.conf, dxvk.conf and bridge.conf — several fixes need more than one.
 PRESETS: dict[str, dict] = {
     "devmenu": {
         "description": "Developer-friendly menu: ALT+X opens Advanced UI with cursor",
-        "options": {
-            "rtx.defaultToAdvancedUI": "True",
-            "rtx.showUICursor": "True",
-        },
+        "options": {"rtx": {
+                "rtx.defaultToAdvancedUI": "True",
+                "rtx.showUICursor": "True",
+        }},
     },
     "debug-geometry-hash": {
         "description": "Color geometry by hash (view 277). Flicker across "
                        "identical frames = unstable hashes.",
-        "options": {
-            "rtx.debugView.debugViewIdx": "277",
-        },
+        "options": {"rtx": {
+                "rtx.debugView.debugViewIdx": "277",
+        }},
     },
     "debug-off": {
         "description": "Disable the debug view (back to normal rendering)",
-        "options": {
-            "rtx.debugView.debugViewIdx": "0",
-        },
+        "options": {"rtx": {
+                "rtx.debugView.debugViewIdx": "0",
+        }},
     },
     "hash-stable-anim": {
         "description": "Hash rule for games with CPU-animated/skinned vertex "
@@ -110,50 +129,50 @@ PRESETS: dict[str, dict] = {
                        "generation hashing. Distinct meshes sharing one "
                        "layout+shader may collide — verify with geometry-hash "
                        "debug view.",
-        "options": {
-            "rtx.geometryGenerationHashRuleString":
-                "indices,geometrydescriptor,vertexlayout,vertexshader",
-        },
+        "options": {"rtx": {
+                "rtx.geometryGenerationHashRuleString":
+                    "indices,geometrydescriptor,vertexlayout,vertexshader",
+        }},
     },
     "hash-default": {
         "description": "Restore dxvk-remix default hash rules",
-        "options": {
-            "rtx.geometryGenerationHashRuleString":
-                "positions,indices,texcoords,geometrydescriptor,vertexlayout,vertexshader",
-            "rtx.geometryAssetHashRuleString":
-                "positions,indices,geometrydescriptor",
-        },
+        "options": {"rtx": {
+                "rtx.geometryGenerationHashRuleString":
+                    "positions,indices,texcoords,geometrydescriptor,vertexlayout,vertexshader",
+                "rtx.geometryAssetHashRuleString":
+                    "positions,indices,geometrydescriptor",
+        }},
     },
     "fallback-light-always": {
         "description": "Always create the camera-following fallback light "
                        "(scene visible even with no converted game lights)",
-        "options": {
-            "rtx.fallbackLightMode": "2",
-            "rtx.fallbackLightType": "0",
-            "rtx.fallbackLightRadiance": "1.6, 1.8, 2.0",
-        },
+        "options": {"rtx": {
+                "rtx.fallbackLightMode": "2",
+                "rtx.fallbackLightType": "0",
+                "rtx.fallbackLightRadiance": "1.6, 1.8, 2.0",
+        }},
     },
     "fallback-light-bright": {
         "description": "Always-on fallback light at high radiance for dark scenes",
-        "options": {
-            "rtx.fallbackLightMode": "2",
-            "rtx.fallbackLightType": "0",
-            "rtx.fallbackLightRadiance": "8.0, 8.0, 8.0",
-        },
+        "options": {"rtx": {
+                "rtx.fallbackLightMode": "2",
+                "rtx.fallbackLightType": "0",
+                "rtx.fallbackLightRadiance": "8.0, 8.0, 8.0",
+        }},
     },
     "fallback-light-off": {
         "description": "Never create the fallback light (production setting)",
-        "options": {
-            "rtx.fallbackLightMode": "0",
-        },
+        "options": {"rtx": {
+                "rtx.fallbackLightMode": "0",
+        }},
     },
     "vertex-capture": {
         "description": "Capture shader-transformed vertices for simple "
                        "vertex-shader games that still set FFP matrices",
-        "options": {
-            "rtx.useVertexCapture": "True",
-            "rtx.useVertexCapturedNormals": "True",
-        },
+        "options": {"rtx": {
+                "rtx.useVertexCapture": "True",
+                "rtx.useVertexCapturedNormals": "True",
+        }},
     },
     "automation": {
         "description": "Remix's own unattended-run settings: no blocking "
@@ -161,63 +180,106 @@ PRESETS: dict[str, dict] = {
                        "(which would make every screenshot diff non-zero), no "
                        "asset-loading error popups. Apply this first on any "
                        "autonomous run.",
-        "options": {
-            "rtx.automation.disableBlockingDialogBoxes": "True",
-            "rtx.automation.disableDisplayMemoryStatistics": "True",
-            "rtx.automation.suppressAssetLoadingErrors": "True",
-        },
+        "options": {"rtx": {
+                "rtx.automation.disableBlockingDialogBoxes": "True",
+                "rtx.automation.disableDisplayMemoryStatistics": "True",
+                "rtx.automation.suppressAssetLoadingErrors": "True",
+        }},
     },
     "sky-autodetect": {
         "description": "Tag sky draws by camera heuristics instead of by "
                        "hash — the one sky mechanism that needs no human "
                        "classifying textures. Try before rtx.skyBoxTextures.",
+        "options": {"rtx": {
+                "rtx.skyAutoDetect": "2",
+                "rtx.skyForceAutoDetectedToReproject": "True",
+        }},
+    },
+    "windowed-capture": {
+        "description": "Force the game out of exclusive fullscreen so GDI "
+                       "screenshots capture actual frames instead of black. "
+                       "This is the fix for a black `screenshot grab`, and it "
+                       "needs dxvk.conf/bridge.conf, not rtx.conf.",
         "options": {
-            "rtx.skyAutoDetect": "2",
-            "rtx.skyForceAutoDetectedToReproject": "True",
+            "dxvk": {"d3d9.enableDialogMode": "True"},
+            "bridge": {"client.forceWindowed": "True"},
         },
+    },
+    "menu-input-force": {
+        "description": "Always forward DirectInput to the Windows message "
+                       "pump so the Remix UI hotkey reaches the runtime. Apply "
+                       "when ALT+X does nothing — the game is swallowing all "
+                       "key input.",
+        "options": {
+            "bridge": {
+                "client.DirectInput.forward.keyboardPolicy": "3",
+                "client.DirectInput.forward.mousePolicy": "2",
+            },
+        },
+    },
+    "verbose-logs": {
+        "description": "Debug-level bridge logging — use when a launch fails "
+                       "with nothing useful in the d3d9 log.",
+        "options": {"bridge": {"logLevel": "Debug"}},
     },
     "capture-ready": {
         "description": "Make the capture hotkey (CTRL+SHFT+Q) write a USD "
                        "capture immediately instead of opening the capture "
                        "menu — the unattended source of asset hashes.",
-        "options": {
-            "rtx.captureShowMenuOnHotkey": "False",
-            "rtx.captureInstances": "True",
-        },
+        "options": {"rtx": {
+                "rtx.captureShowMenuOnHotkey": "False",
+                "rtx.captureInstances": "True",
+        }},
     },
     "keep-textures": {
         "description": "Keep every texture resident so short-lived ones "
                        "(loading screens, one-frame HUD elements) still show "
                        "up for tagging. Costs VRAM — development only.",
-        "options": {
-            "rtx.keepTexturesForTagging": "True",
-        },
+        "options": {"rtx": {
+                "rtx.keepTexturesForTagging": "True",
+        }},
     },
     "anticulling-on": {
         "description": "Keep game-culled objects and lights in the ray "
                        "tracing scene so reflections and shadows include "
                        "geometry the game frustum-culled.",
-        "options": {
-            "rtx.antiCulling.object.enable": "True",
-            "rtx.antiCulling.object.numObjectsToKeep": "10000",
-            "rtx.antiCulling.light.enable": "True",
-            "rtx.antiCulling.light.numFramesToExtendLightLifetime": "1000",
-        },
+        "options": {"rtx": {
+                "rtx.antiCulling.object.enable": "True",
+                "rtx.antiCulling.object.numObjectsToKeep": "10000",
+                "rtx.antiCulling.light.enable": "True",
+                "rtx.antiCulling.light.numFramesToExtendLightLifetime": "1000",
+        }},
     },
     "anticulling-off": {
         "description": "Disable anti-culling (restore runtime defaults)",
-        "options": {
-            "rtx.antiCulling.object.enable": "False",
-            "rtx.antiCulling.light.enable": "False",
-        },
+        "options": {"rtx": {
+                "rtx.antiCulling.object.enable": "False",
+                "rtx.antiCulling.light.enable": "False",
+        }},
     },
 }
 
 
 # ── rtx.conf editing ───────────────────────────────────────────────────────
 
-def conf_path(game_dir: str | Path) -> Path:
-    return Path(game_dir) / RTX_CONF
+def conf_path(game_dir: str | Path, surface: str = "rtx") -> Path:
+    """Path to one of a Remix install's config files.
+
+    Args:
+        game_dir: Game directory.
+        surface:  `rtx`, `dxvk` or `bridge`.
+
+    Returns:
+        The config path, whether or not it exists yet.
+
+    Raises:
+        KeyError: On an unknown surface.
+    """
+    root = Path(game_dir)
+    if surface == "bridge" and not (root / CONF_SURFACES["bridge"]).is_file() \
+            and (root / _BRIDGE_ALT).is_file():
+        return root / _BRIDGE_ALT
+    return root / CONF_SURFACES[surface]
 
 
 def parse_conf(text: str) -> dict[str, str]:
@@ -366,23 +428,34 @@ def remove_hash(path: str | Path, key: str, hash_value: str,
     return kept
 
 
-def apply_preset(path: str | Path, name: str, backup: bool = True,
+def apply_preset(game_dir: str | Path, name: str, backup: bool = True,
                  backup_dir: str | Path | None = None) -> dict:
-    """Apply a named preset's options to rtx.conf.
+    """Apply a named preset across whichever config files it touches.
+
+    Args:
+        game_dir:   Game directory holding rtx.conf / dxvk.conf / bridge.conf.
+        name:       Preset name from PRESETS.
+        backup:     Back up each file before its first write.
+        backup_dir: Where backups go (see `_backup`).
 
     Returns:
-        The preset's option dict.
+        {surface: {option: value}} as written, with the resolved path per
+        surface under `paths`.
 
     Raises:
         KeyError: If the preset name is unknown.
     """
     preset = PRESETS[name]
-    first = True
-    for key, value in preset["options"].items():
-        set_option(path, key, value, backup=backup and first,
-                   backup_dir=backup_dir)
-        first = False
-    return preset["options"]
+    paths = {}
+    for surface, options in preset["options"].items():
+        path = conf_path(game_dir, surface)
+        paths[surface] = str(path)
+        first = True
+        for key, value in options.items():
+            set_option(path, key, value, backup=backup and first,
+                       backup_dir=backup_dir)
+            first = False
+    return {"options": preset["options"], "paths": paths}
 
 
 # ── Runtime detection and logs ─────────────────────────────────────────────
@@ -405,6 +478,7 @@ def detect_runtime(game_dir: str | Path) -> dict:
             remix_markers: which installation markers were found
             is_remix:      overall verdict
             rtx_conf:      path if present
+            configs:       per surface (rtx/dxvk/bridge): path, present, option count
             logs:          matching log files (name, size, mtime)
     """
     d = Path(game_dir)
@@ -438,12 +512,19 @@ def detect_runtime(game_dir: str | Path) -> dict:
                          "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
                                                 time.localtime(st.st_mtime))})
 
+    configs = {}
+    for surface in CONF_SURFACES:
+        path = conf_path(d, surface)
+        configs[surface] = {"path": str(path), "present": path.is_file(),
+                            "options": len(load_conf(path))}
+
     return {
         "game_dir": str(d),
         "d3d9_dll": {"present": d3d9.is_file(), "size": d3d9_size},
         "remix_markers": markers,
         "is_remix": is_remix,
         "rtx_conf": str(conf) if conf.is_file() else None,
+        "configs": configs,
         "logs": logs,
     }
 

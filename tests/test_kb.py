@@ -143,3 +143,125 @@ class TestReadExistingAddresses:
     def test_missing_file_empty_set(self, tmp_path):
         from kb import read_existing_addresses
         assert read_existing_addresses(tmp_path / "nope.h") == set()
+
+
+# ── validation ─────────────────────────────────────────────────────────────
+
+from retools.kb import add_entries, line_problem, parse_kb, validate  # noqa: E402
+
+
+@pytest.mark.parametrize("line", [
+    "",
+    "   ",
+    "// just a comment",
+    "@ 0x401000 void __cdecl Foo(int a);",
+    "$ 0x7C5548 Object* g_main",
+    "struct Foo { int x; };",
+    "@ 0x401000 void Foo();  // trailing comment",
+])
+def test_well_formed_lines_have_no_problem(line):
+    assert line_problem(line) is None
+
+
+@pytest.mark.parametrize("line,fragment", [
+    ("@0x401000 void Foo();", "followed by a space"),
+    ("$0x7C5548 Obj* g;", "followed by a space"),
+    ("@ notahex void Foo();", "not a hex address"),
+    ("$ notahex Obj* g", "not a hex address"),
+    ("@ 0x401000", "needs"),
+    ("$ 0x7C5548", "needs"),
+])
+def test_malformed_lines_are_explained(line, fragment):
+    problem = line_problem(line)
+    assert problem and fragment in problem
+
+
+def test_validate_reports_line_numbers(tmp_path):
+    kb = tmp_path / "kb.h"
+    kb.write_text("struct Ok { int a; };\n@0x401000 void Foo();\n"
+                  "@ 0x402000 void Bar();\n")
+    problems = validate(kb)
+    assert [n for n, _, _ in problems] == [2]
+
+
+def test_validate_of_a_clean_file_is_empty(tmp_path):
+    kb = tmp_path / "kb.h"
+    kb.write_text("@ 0x401000 void Foo();\n$ 0x7C5548 int g_x\n")
+    assert validate(kb) == []
+
+
+# ── writing ────────────────────────────────────────────────────────────────
+
+def test_add_creates_the_file_and_its_parents(tmp_path):
+    kb = tmp_path / "patches" / "MyGame" / "kb.h"
+    result = add_entries(kb, functions=[(0x401000, "void __cdecl Foo(int)")],
+                         globals_=[(0x7C5548, "Object* g_main")],
+                         typedefs=["struct Foo { int x; };"])
+    assert result["added"] == 3
+    parsed = parse_kb(kb)
+    assert parsed.functions[0].name == "Foo"
+    assert parsed.globals[0].name == "g_main"
+    assert parsed.typedefs == ["struct Foo { int x; };"]
+
+
+def test_entries_round_trip_through_the_parser(tmp_path):
+    kb = tmp_path / "kb.h"
+    add_entries(kb, functions=[(0x401000, "void __cdecl Foo(int key)")])
+    assert parse_kb(kb).functions[0].address == 0x401000
+
+
+def test_a_better_signature_replaces_the_old_one(tmp_path):
+    kb = tmp_path / "kb.h"
+    add_entries(kb, functions=[(0x401000, "void Foo()")])
+    result = add_entries(kb, functions=[(0x401000, "int Foo(int key, int mods)")])
+    assert result == {**result, "added": 0, "replaced": 1}
+    functions = parse_kb(kb).functions
+    assert len(functions) == 1
+    assert "mods" in functions[0].signature
+
+
+def test_no_replace_leaves_an_existing_entry_alone(tmp_path):
+    kb = tmp_path / "kb.h"
+    add_entries(kb, functions=[(0x401000, "void Foo()")])
+    result = add_entries(kb, functions=[(0x401000, "int Other()")],
+                         replace=False)
+    assert result["skipped"] == 1
+    assert parse_kb(kb).functions[0].name == "Foo"
+
+
+def test_rewriting_an_entry_preserves_surrounding_lines(tmp_path):
+    kb = tmp_path / "kb.h"
+    kb.write_text("// header\n@ 0x401000 void Foo();\nstruct Keep { int a; };\n")
+    add_entries(kb, functions=[(0x401000, "int Foo(int)")])
+    text = kb.read_text()
+    assert "// header" in text and "struct Keep { int a; };" in text
+
+
+def test_duplicate_typedefs_are_not_appended_twice(tmp_path):
+    kb = tmp_path / "kb.h"
+    add_entries(kb, typedefs=["struct Foo { int x; };"])
+    result = add_entries(kb, typedefs=["struct Foo { int x; };"])
+    assert result["skipped"] == 1
+    assert parse_kb(kb).typedefs == ["struct Foo { int x; };"]
+
+
+def test_an_unparseable_entry_is_refused_rather_than_written(tmp_path):
+    kb = tmp_path / "kb.h"
+    with pytest.raises(ValueError):
+        add_entries(kb, functions=[(0x401000, "")])
+    assert not kb.exists()
+
+
+def test_addresses_written_are_the_addresses_bootstrap_skips(tmp_path):
+    from retools.kb import read_existing_addresses
+
+    kb = tmp_path / "kb.h"
+    add_entries(kb, functions=[(0x401000, "void Foo()")],
+                globals_=[(0x7C5548, "int g_x")])
+    assert read_existing_addresses(kb) == {0x401000, 0x7C5548}
+
+
+def test_a_signature_without_a_parameter_list_is_refused(tmp_path):
+    assert line_problem("@ 0x401000 int;")
+    with pytest.raises(ValueError):
+        add_entries(tmp_path / "kb.h", functions=[(0x401000, "int")])

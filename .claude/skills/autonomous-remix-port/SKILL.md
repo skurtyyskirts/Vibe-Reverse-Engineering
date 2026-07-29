@@ -23,7 +23,11 @@ Never chain blind inputs. Never claim a render state you have not screenshotted.
    shader-based and unported, that becomes Phase 6 work via `dx9-ffp-port`).
 3. Game must run **windowed or borderless** — exclusive fullscreen captures
    black. `screenshot grab` says so (`frame: black`, exit 3) instead of saving
-   a black PNG silently; fix it in the game's own config before continuing.
+   a black PNG silently. Fix it without touching the game's own settings:
+   `remix preset apply windowed-capture -d <GAMEDIR>` writes
+   `d3d9.enableDialogMode` (dxvk.conf) and `client.forceWindowed`
+   (bridge.conf). If ALT+X later does nothing, the game is swallowing key
+   input — `remix preset apply menu-input-force -d <GAMEDIR>`.
 4. Overnight runs: start `python -m livetools proc keep-awake --duration 43200`
    in the background. A slept machine stops delivering input and captures black.
 
@@ -117,8 +121,9 @@ loop continues — never idle waiting for it.
 Phases run in order; later phases loop back when verification fails.
 
 ### Phase 0 — Preflight
-`verify_install.py`, `remix status`, `autonomy init`, `proc keep-awake` in the
-background. Back up any existing rtx.conf / proxy ini.
+`verify_install.py`, `remix status` (reports all three config surfaces),
+`autonomy init`, `proc keep-awake` in the background, `remix preset apply
+automation`. Back up any existing rtx.conf / proxy ini.
 Gate: `remix status` shows Remix markers.
 
 ### Phase 1 — Static bootstrap (background)
@@ -168,10 +173,14 @@ Remix's own hotkeys pass through `CHORD:` tokens.
 
 ### Phase 4 — Remix baseline
 ```bash
+python -m livetools remix preset apply automation -d <GAMEDIR>
 python -m livetools remix preset apply devmenu -d <GAMEDIR>
 python -m livetools remix preset apply capture-ready -d <GAMEDIR>
 python -m livetools remix log -d <GAMEDIR> --errors
 ```
+Apply `automation` before anything else on an unattended run: it stops Remix
+opening dialogs nobody will click and removes the per-frame memory readout
+that otherwise makes every screenshot diff non-zero.
 Restart, replay the Phase 3 macro, screenshot the normal render. Verify runtime
 control end to end once: `remix menu --exe <exe>` → screenshot (menu visible?)
 → `remix menu` again to close. Cycle a debug view by conf (restart between):
@@ -283,6 +292,8 @@ Tools worth reaching for when a phase stalls — all reachable from this loop:
 - `retools.throwmap` / `dumpinfo diagnose` — triage a crash the watchdog keeps
   hitting
 - `retools.dataflow --constants` — where a magic render-state value comes from
+- `retools.kb add` — write what a live trace proved back into kb.h, so the next
+  decompilation reads better than the last
 
 ## Anti-patterns
 

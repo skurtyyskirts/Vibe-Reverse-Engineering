@@ -30,6 +30,23 @@ def test_decode_rejects_non_png():
         ss.decode_png(b"definitely not a png")
 
 
+def test_decode_truncated_png_raises_valueerror():
+    png = ss.encode_png(8, 8, _gradient_rgb(8, 8))
+    with pytest.raises(ValueError):
+        ss.decode_png(png[:len(png) - 20])
+
+
+def test_decode_corrupt_idat_raises_valueerror():
+    w, h = 4, 4
+    raw_len = (w * 3 + 1) * h
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n" + ss._chunk(b"IHDR", ihdr)
+           + ss._chunk(b"IDAT", b"\xde\xad" * (raw_len // 2))
+           + ss._chunk(b"IEND", b""))
+    with pytest.raises(ValueError):
+        ss.decode_png(png)
+
+
 def _encode_with_filters(width, height, rgb, filter_type):
     """Build a valid RGB PNG whose every scanline uses filter_type."""
     stride = width * 3

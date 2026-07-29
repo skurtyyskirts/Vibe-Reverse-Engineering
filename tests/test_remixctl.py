@@ -54,6 +54,15 @@ def test_set_option_no_backup_for_new_file(conf):
     assert remixctl.set_option(conf, "rtx.zUp", "True", backup=True) is None
 
 
+def test_backups_in_same_second_stay_distinct(conf):
+    conf.write_text("rtx.zUp = False\n")
+    bak1 = remixctl.set_option(conf, "rtx.zUp", "True", backup=True)
+    bak2 = remixctl.set_option(conf, "rtx.zUp", "False", backup=True)
+    assert bak1 != bak2
+    assert "rtx.zUp = False" in bak1.read_text()
+    assert "rtx.zUp = True" in bak2.read_text()
+
+
 def test_unset_option(conf):
     conf.write_text("# note\nrtx.zUp = True\nrtx.sceneScale = 1\n")
     assert remixctl.unset_option(conf, "rtx.zUp", backup=False) is True
@@ -118,6 +127,19 @@ def test_detect_runtime_with_markers(tmp_path):
     assert any(".trex" in m for m in info["remix_markers"])
     assert info["rtx_conf"] is not None
     assert [lg["name"] for lg in info["logs"]] == ["game_d3d9.log"]
+
+
+def test_detect_runtime_size_hint_alone_is_not_remix(tmp_path):
+    (tmp_path / "d3d9.dll").write_bytes(b"\0" * remixctl._REMIX_D3D9_MIN_BYTES)
+    info = remixctl.detect_runtime(tmp_path)
+    assert any("large d3d9.dll" in m for m in info["remix_markers"])
+    assert info["is_remix"] is False
+
+
+def test_detect_runtime_size_hint_plus_rtx_conf_is_remix(tmp_path):
+    (tmp_path / "d3d9.dll").write_bytes(b"\0" * remixctl._REMIX_D3D9_MIN_BYTES)
+    (tmp_path / "rtx.conf").write_text("rtx.zUp = True\n")
+    assert remixctl.detect_runtime(tmp_path)["is_remix"] is True
 
 
 def test_read_logs_tail_and_errors_only(tmp_path):

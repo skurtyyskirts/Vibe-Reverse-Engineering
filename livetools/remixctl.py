@@ -188,8 +188,11 @@ def _backup(path: Path) -> Path | None:
         return None
     stamp = time.strftime("%Y%m%d_%H%M%S")
     bak = path.with_name(f"{path.name}.{stamp}.bak")
-    if not bak.exists():
-        shutil.copy2(path, bak)
+    n = 2
+    while bak.exists():
+        bak = path.with_name(f"{path.name}.{stamp}-{n}.bak")
+        n += 1
+    shutil.copy2(path, bak)
     return bak
 
 
@@ -326,20 +329,27 @@ def detect_runtime(game_dir: str | Path) -> dict:
             logs:          matching log files (name, size, mtime)
     """
     d = Path(game_dir)
-    markers: list[str] = []
 
     d3d9 = d / "d3d9.dll"
     d3d9_size = d3d9.stat().st_size if d3d9.is_file() else 0
+    conf = conf_path(d)
 
+    strong: list[str] = []
     if (d / ".trex").is_dir():
-        markers.append(".trex/ directory (bridge runtime)")
+        strong.append(".trex/ directory (bridge runtime)")
     for name in ("d3d9_remix.dll", "NvRemixBridge.exe"):
         if (d / name).is_file():
-            markers.append(name)
+            strong.append(name)
     if (d / ".trex" / "NvRemixBridge.exe").is_file():
-        markers.append(".trex/NvRemixBridge.exe")
+        strong.append(".trex/NvRemixBridge.exe")
+
+    # dll size alone can match any fat wrapper — it only counts alongside
+    # a strong marker or an rtx.conf
+    markers = list(strong)
     if d3d9_size >= _REMIX_D3D9_MIN_BYTES:
         markers.append(f"large d3d9.dll ({d3d9_size // (1024 * 1024)} MB)")
+    is_remix = bool(strong) or (d3d9_size >= _REMIX_D3D9_MIN_BYTES
+                                and conf.is_file())
 
     logs = []
     for pattern in LOG_PATTERNS:
@@ -349,12 +359,11 @@ def detect_runtime(game_dir: str | Path) -> dict:
                          "mtime": time.strftime("%Y-%m-%d %H:%M:%S",
                                                 time.localtime(st.st_mtime))})
 
-    conf = conf_path(d)
     return {
         "game_dir": str(d),
         "d3d9_dll": {"present": d3d9.is_file(), "size": d3d9_size},
         "remix_markers": markers,
-        "is_remix": bool(markers),
+        "is_remix": is_remix,
         "rtx_conf": str(conf) if conf.is_file() else None,
         "logs": logs,
     }

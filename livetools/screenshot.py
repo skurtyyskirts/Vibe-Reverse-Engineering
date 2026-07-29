@@ -92,8 +92,12 @@ def decode_png(data: bytes) -> tuple[int, int, bytes]:
     while pos + 8 <= len(data):
         length, tag = struct.unpack(">I4s", data[pos:pos + 8])
         body = data[pos + 8:pos + 8 + length]
+        if len(body) != length:
+            raise ValueError(f"Truncated PNG chunk {tag!r}")
         pos += 12 + length
         if tag == b"IHDR":
+            if length != 13:
+                raise ValueError("Malformed IHDR chunk")
             width, height, depth, color, _comp, _filt, interlace = \
                 struct.unpack(">IIBBBBB", body)
             if depth != 8 or color not in (2, 6) or interlace != 0:
@@ -108,7 +112,10 @@ def decode_png(data: bytes) -> tuple[int, int, bytes]:
     if not width or not idat:
         raise ValueError("PNG missing IHDR or IDAT")
 
-    raw = zlib.decompress(bytes(idat))
+    try:
+        raw = zlib.decompress(bytes(idat))
+    except zlib.error as e:
+        raise ValueError(f"Corrupt PNG image data: {e}") from e
     stride = width * channels
     if len(raw) != (stride + 1) * height:
         raise ValueError("PNG scanline data has unexpected length")

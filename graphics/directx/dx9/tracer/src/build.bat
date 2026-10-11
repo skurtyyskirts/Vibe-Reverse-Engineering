@@ -10,8 +10,10 @@ REM
 REM Output: d3d9.dll copied to ../bin/
 REM ================================================================
 
-REM Auto-find Visual Studio via vswhere
-for /f "tokens=*" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2^>nul') do set VSDIR=%%i
+REM Auto-find Visual Studio via vswhere: any edition (Build Tools included), prerelease
+REM included, that has the x86/x64 C++ tools. "-latest" alone skips prerelease and
+REM incomplete instances, which is all some machines have.
+for /f "tokens=*" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul') do set VSDIR=%%i
 
 if not defined VSDIR (
     echo ERROR: Visual Studio not found. Install VS Build Tools.

@@ -414,10 +414,23 @@ def cmd_exception(dump: MinidumpFile, _args):
 
 
 def _iter_segments(dump: MinidumpFile):
-    """Yield (start_addr, size) for every memory segment in the dump."""
-    if dump.memory_segments:
-        for seg in dump.memory_segments.memory_segments:
-            yield seg.start_virtual_address, seg.size
+    """Yield (start_addr, size) for every memory segment in the dump.
+    Contiguous segments are coalesced to reduce repeated reads."""
+    if not dump.memory_segments or not dump.memory_segments.memory_segments:
+        return
+
+    segs = sorted(dump.memory_segments.memory_segments, key=lambda s: s.start_virtual_address)
+    current_addr = segs[0].start_virtual_address
+    current_size = segs[0].size
+
+    for seg in segs[1:]:
+        if seg.start_virtual_address == current_addr + current_size:
+            current_size += seg.size
+        else:
+            yield current_addr, current_size
+            current_addr = seg.start_virtual_address
+            current_size = seg.size
+    yield current_addr, current_size
 
 
 def cmd_strings(dump: MinidumpFile, args):
@@ -428,27 +441,25 @@ def cmd_strings(dump: MinidumpFile, args):
     min_len = args.min_len
     count = 0
 
+    # Precompile regex to find valid ascii sequences
+    str_pattern = _re.compile(rb'[\x20-\x7e]{%d,}' % min_len)
+
     for seg_addr, seg_size in _iter_segments(dump):
         try:
             data = reader.read(seg_addr, seg_size)
         except Exception:
             continue
 
-        i = 0
-        while i < len(data):
-            j = i
-            while j < len(data) and 0x20 <= data[j] < 0x7F:
-                j += 1
-            slen = j - i
-            if slen >= min_len and j < len(data) and data[j] == 0:
-                s = data[i:j].decode("ascii", errors="replace")
+        for match in str_pattern.finditer(data):
+            end = match.end()
+            if end < len(data) and data[end] == 0:
+                s = match.group().decode("ascii", errors="replace")
                 if pattern is None or pattern.search(s):
-                    addr = seg_addr + i
+                    addr = seg_addr + match.start()
                     mod = _resolve_addr(modules, addr)
                     loc = f"  ({mod})" if "+" in mod else ""
-                    print(f"  0x{addr:016X} [{slen:4d}]: {s[:200]}{loc}")
+                    print(f"  0x{addr:016X} [{len(s):4d}]: {s[:200]}{loc}")
                     count += 1
-            i = j + 1 if j > i else i + 1
 
     if count == 0:
         print("No strings found matching criteria.")
@@ -473,17 +484,19 @@ def cmd_memscan(dump: MinidumpFile, args):
           f"{needle[:40]!r}{'...' if len(needle) > 40 else ''}\n")
 
     count = 0
+    import re as _re
+    # Using a lookahead pattern enables finding overlapping matches,
+    # perfectly matching the previous `idx += 1` behavior while being faster
+    pattern = _re.compile(b'(?=' + _re.escape(needle) + b')')
+
     for seg_addr, seg_size in _iter_segments(dump):
         try:
             data = reader.read(seg_addr, seg_size)
         except Exception:
             continue
 
-        idx = 0
-        while True:
-            idx = data.find(needle, idx)
-            if idx < 0:
-                break
+        for match in pattern.finditer(data):
+            idx = match.start()
             addr = seg_addr + idx
             mod = _resolve_addr(modules, addr)
             ctx_start = max(0, idx - 8)
@@ -496,7 +509,6 @@ def cmd_memscan(dump: MinidumpFile, args):
             print(f"    {hex_str}")
             print(f"    {ascii_str}")
             count += 1
-            idx += 1
 
     if count == 0:
         print("Pattern not found in dump memory.")

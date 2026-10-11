@@ -55,6 +55,7 @@ python -m livetools resume                    # unfreeze target
 ```
 python -m livetools mem write <addr> <hex>    # write bytes to live memory
 python -m livetools mem alloc <size>          # allocate rwx memory in target (for code caves)
+python -m livetools call <addr> [--abi stdcall|thiscall|fastcall] [--ret-type int32] [--arg-types pointer,int32] [--arg-values 0x10E5370,4]   # call a native function in-process
 python -m livetools scan <pattern> --range START:SIZE
 ```
 

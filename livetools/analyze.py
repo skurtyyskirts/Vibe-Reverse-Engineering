@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-# ── field path resolution ──────────────────────────────────────────────────
+# ── field path resolution ────────────────────────────────────────────
 
 def _resolve_field(record: dict, path: str) -> Any:
     """Resolve a dot-separated field path with optional array indices.
@@ -45,7 +45,7 @@ def _resolve_field(record: dict, path: str) -> Any:
     return cur
 
 
-# ── filter parsing ─────────────────────────────────────────────────────────
+# ── filter parsing ───────────────────────────────────────────────
 
 def _parse_filter(expr: str):
     """Parse "field==value" / "field!=value" / "field>value" etc."""
@@ -84,7 +84,7 @@ def _match_filter(record: dict, field: str, op: str, val: Any) -> bool:
     return str(rv) == str(val) if op == "==" else str(rv) != str(val)
 
 
-# ── JSONL reader ───────────────────────────────────────────────────────────
+# ── JSONL reader ───────────────────────────────────────────────
 
 def _load_records(path: str, filter_expr: str | None = None) -> list[dict]:
     records = []
@@ -92,14 +92,22 @@ def _load_records(path: str, filter_expr: str | None = None) -> list[dict]:
     if filter_expr:
         field, op, val = _parse_filter(filter_expr)
 
+    try:
+        import orjson
+        json_loads = orjson.loads
+        json_error = orjson.JSONDecodeError
+    except ImportError:
+        json_loads = json.loads
+        json_error = json.JSONDecodeError
+
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
+                rec = json_loads(line)
+            except json_error:
                 continue
             if field and not _match_filter(rec, field, op, val):
                 continue
@@ -107,7 +115,7 @@ def _load_records(path: str, filter_expr: str | None = None) -> list[dict]:
     return records
 
 
-# ── analysis operations ────────────────────────────────────────────────────
+# ── analysis operations ────────────────────────────────────────────
 
 def _summary(records: list[dict]) -> str:
     lines = []
@@ -223,26 +231,34 @@ def _show_intervals_range(records: list[dict], range_str: str) -> str:
         lo, hi = int(parts[0]), int(parts[1])
     except ValueError:
         return "Invalid range format. Use N:M"
-    subset = [r for r in records if lo <= (r.get("interval", -1) or -1) <= hi]
-    lines = [f"Intervals {lo}..{hi}: {len(subset)} records", ""]
+
     by_iv: dict[int, int] = Counter()
-    for r in subset:
-        by_iv[r.get("interval", 0)] += 1
+    total = 0
+    for r in records:
+        # Original logic: lo <= (r.get("interval", -1) or -1) <= hi
+        val = r.get("interval", -1)
+        filter_val = val or -1
+        if lo <= filter_val <= hi:
+            # Original counting logic: by_iv[r.get("interval", 0)] += 1
+            count_val = r.get("interval", 0)
+            by_iv[count_val] += 1
+            total += 1
+
+    lines = [f"Intervals {lo}..{hi}: {total} records", ""]
     for iv in sorted(by_iv):
         lines.append(f"  Interval {iv}: {by_iv[iv]} records")
     return "\n".join(lines)
 
 
 def _compare_intervals(records: list[dict], a: int, b: int) -> str:
-    sa = [r for r in records if r.get("interval") == a]
-    sb = [r for r in records if r.get("interval") == b]
-
     ca: Counter = Counter()
     cb: Counter = Counter()
-    for r in sa:
-        ca[r.get("addr", "?")] += 1
-    for r in sb:
-        cb[r.get("addr", "?")] += 1
+    for r in records:
+        iv = r.get("interval")
+        if iv == a:
+            ca[r.get("addr", "?")] += 1
+        if iv == b:
+            cb[r.get("addr", "?")] += 1
 
     all_addrs = sorted(set(ca.keys()) | set(cb.keys()))
     lines = [f"Compare interval {a} vs {b}", ""]
@@ -254,7 +270,9 @@ def _compare_intervals(records: list[dict], a: int, b: int) -> str:
         sign = "+" if delta > 0 else ""
         lines.append(f"  {addr:<20s}  {va:>10d}  {vb:>10d}  {sign}{delta:>9d}")
     lines.append("")
-    lines.append(f"  Total: {len(sa)} vs {len(sb)} records")
+    total_a = sum(ca.values())
+    total_b = sum(cb.values())
+    lines.append(f"  Total: {total_a} vs {total_b} records")
     return "\n".join(lines)
 
 
@@ -332,7 +350,7 @@ def _flatten(d: dict, prefix: str = "") -> dict:
     return out
 
 
-# ── entry point ────────────────────────────────────────────────────────────
+# ── entry point ───────────────────────────────────────────────
 
 def run_analyze(args) -> None:
     fpath = args.file

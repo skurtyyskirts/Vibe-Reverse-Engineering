@@ -338,17 +338,36 @@ def cmd_match(args):
             continue
         sp = ctx.Rsp if hasattr(ctx, "Rsp") else ctx.Esp
 
-        for chunk_off in range(0, scan_bytes, chunk_size):
-            try:
-                chunk = reader.read(sp + chunk_off, chunk_size)
-            except Exception:
-                continue
-            for i in range(0, len(chunk) - ptr_size + 1, ptr_size):
-                val = struct.unpack_from(ptr_fmt, chunk, i)[0]
-                if val in ret_lookup:
-                    site_rva, ret_rva, s = ret_lookup[val]
-                    stack_addr = sp + chunk_off + i
-                    matches.append((t.ThreadId, stack_addr, site_rva, ret_rva, s))
+        try:
+            # Fast path: try to read the entire scan window at once
+            chunk = reader.read(sp, scan_bytes)
+            num_ptrs = len(chunk) // ptr_size
+            valid_len = num_ptrs * ptr_size
+            if valid_len > 0:
+                fmt = f"<{num_ptrs}{ptr_fmt[-1]}"
+                vals = struct.unpack(fmt, chunk[:valid_len])
+                for i, val in enumerate(vals):
+                    if val in ret_lookup:
+                        site_rva, ret_rva, s = ret_lookup[val]
+                        stack_addr = sp + i * ptr_size
+                        matches.append((t.ThreadId, stack_addr, site_rva, ret_rva, s))
+        except Exception:
+            # Fallback: if the full read fails (e.g., spanning unmapped pages), read in chunks
+            for chunk_off in range(0, scan_bytes, chunk_size):
+                try:
+                    chunk = reader.read(sp + chunk_off, chunk_size)
+                except Exception:
+                    continue
+                num_ptrs = len(chunk) // ptr_size
+                valid_len = num_ptrs * ptr_size
+                if valid_len > 0:
+                    fmt = f"<{num_ptrs}{ptr_fmt[-1]}"
+                    vals = struct.unpack(fmt, chunk[:valid_len])
+                    for i, val in enumerate(vals):
+                        if val in ret_lookup:
+                            site_rva, ret_rva, s = ret_lookup[val]
+                            stack_addr = sp + chunk_off + i * ptr_size
+                            matches.append((t.ThreadId, stack_addr, site_rva, ret_rva, s))
 
     if not matches:
         print("\nNo throw-site return addresses found on any thread's stack.")

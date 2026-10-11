@@ -1,3 +1,7 @@
+import sys
+from unittest.mock import MagicMock
+if 'r2pipe' not in sys.modules:
+    sys.modules['r2pipe'] = MagicMock()
 """Tests for decompiler.py backend routing logic."""
 
 import sys
@@ -109,3 +113,131 @@ class TestLoadTypesOrdering:
 
         assert td_idx < tl_idx
         assert td_idx < afs_idx
+
+class TestDecompilerR2:
+    def setup_method(self):
+        self.mock_find_r2 = patch("decompiler._find_r2_bin", return_value="/fake/r2").start()
+        self.mock_ensure_path = patch("decompiler._ensure_r2_in_path").start()
+        self.mock_r2pipe_open = patch("r2pipe.open").start()
+        self.mock_sleigh_home = patch("decompiler._find_sleigh_home", return_value=None).start()
+        self.mock_load_types = patch("decompiler._load_types").start()
+
+        self.mock_r2 = MagicMock()
+        self.mock_r2pipe_open.return_value = self.mock_r2
+
+    def teardown_method(self):
+        patch.stopall()
+
+    def test_auto_backend_pdg_success(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "int main() {}"
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        result = decompile("fake.exe", 0x401000)
+        assert result == "int main() {}"
+        self.mock_r2.cmd.assert_any_call("pdg @ 0x401000")
+
+    def test_auto_backend_pdg_install_fallback(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "Please install r2ghidra"
+            if arg.startswith("pdc @"): return "int main_pdc() {}"
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        result = decompile("fake.exe", 0x401000)
+        assert result == "int main_pdc() {}"
+        self.mock_r2.cmd.assert_any_call("pdg @ 0x401000")
+        self.mock_r2.cmd.assert_any_call("pdc @ 0x401000")
+
+    def test_auto_backend_both_fail(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "install"
+            if arg.startswith("pdc @"): return "  "
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        result = decompile("fake.exe", 0x401000)
+        assert "[error]" in result
+        assert "No decompiler backend produced output" in result
+
+    def test_explicit_backend(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdd @"): return "JS decompiler out"
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        result = decompile("fake.exe", 0x401000, backend="pdd")
+        assert result == "JS decompiler out"
+        self.mock_r2.cmd.assert_any_call("pdd @ 0x401000")
+
+    def test_unknown_backend(self):
+        from decompiler import decompile
+        result = decompile("fake.exe", 0x401000, backend="invalid_backend")
+        assert "[error]" in result
+        assert "Unknown backend" in result
+
+    def test_explicit_backend_no_output(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdc @"): return "   "
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        result = decompile("fake.exe", 0x401000, backend="pdc")
+        assert "[error]" in result
+        assert "pdc produced no output" in result
+
+    def test_full_analysis(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "out"
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        decompile("fake.exe", 0x401000, full_analysis=True)
+        self.mock_r2.cmd.assert_any_call("aaa")
+
+    def test_no_full_analysis(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "out"
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        decompile("fake.exe", 0x401000, full_analysis=False)
+        self.mock_r2.cmd.assert_any_call("af @ 0x401000")
+
+    def test_sleigh_home_set(self):
+        from decompiler import decompile
+        patch.stopall() # Stop default mock
+
+        self.mock_find_r2 = patch("decompiler._find_r2_bin", return_value="/fake/r2").start()
+        self.mock_ensure_path = patch("decompiler._ensure_r2_in_path").start()
+        self.mock_r2pipe_open = patch("r2pipe.open").start()
+        self.mock_load_types = patch("decompiler._load_types").start()
+        self.mock_sleigh_home = patch("decompiler._find_sleigh_home", return_value="/custom/sleigh/path").start()
+
+        mock_r2_local = MagicMock()
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "out"
+            return ""
+        mock_r2_local.cmd.side_effect = mock_cmd
+        self.mock_r2pipe_open.return_value = mock_r2_local
+
+        decompile("fake.exe", 0x401000)
+        mock_r2_local.cmd.assert_any_call("e r2ghidra.sleighhome=/custom/sleigh/path")
+
+    def test_types_loaded(self):
+        from decompiler import decompile
+        def mock_cmd(arg):
+            if arg.startswith("pdg @"): return "out"
+            return ""
+        self.mock_r2.cmd.side_effect = mock_cmd
+
+        decompile("fake.exe", 0x401000, types="fake_types.h")
+        self.mock_load_types.assert_called_once_with(self.mock_r2, "fake_types.h")

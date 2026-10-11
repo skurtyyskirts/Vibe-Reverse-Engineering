@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import secrets
 import socket
 import struct
 import sys
@@ -42,6 +43,7 @@ class Daemon:
         self._hit_event = threading.Event()
         self._lock = threading.Lock()
         self._running = True
+        self.auth_token = secrets.token_hex(16)
 
         self._trace_batches: dict[int, list] = {}
         self._trace_done: dict[int, bool] = {}
@@ -49,7 +51,7 @@ class Daemon:
 
         self._steptrace_event = threading.Event()
 
-    # ── Frida setup ────────────────────────────────────────────────────────
+    # ── Frida setup ───────────────────────────────────────────────────────────────────────
 
     def attach(self) -> None:
         self.dev = frida.get_local_device()
@@ -123,16 +125,16 @@ class Daemon:
                 with self._lock:
                     self._trace_batches.setdefault(tid, []).extend(samples)
                     ev = self._trace_events.get(tid)
-                    if ev:
-                        ev.set()
+                if ev:
+                    ev.set()
 
             elif ptype == "trace_done":
                 tid = payload.get("traceId", 0)
                 with self._lock:
                     self._trace_done[tid] = True
                     ev = self._trace_events.get(tid)
-                    if ev:
-                        ev.set()
+                if ev:
+                    ev.set()
 
             elif ptype == "trace_error":
                 print(f"[agent trace_error] {payload}", file=sys.stderr)
@@ -143,7 +145,7 @@ class Daemon:
         elif message.get("type") == "error":
             print(f"[agent error] {message.get('description', '?')}", file=sys.stderr)
 
-    # ── helpers ────────────────────────────────────────────────────────────
+    # ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     def _base_resp(self) -> dict:
         api = self.api
@@ -164,7 +166,7 @@ class Daemon:
         traces_dir.mkdir(parents=True, exist_ok=True)
         return traces_dir / filename
 
-    # ── command dispatch ───────────────────────────────────────────────────
+    # ── command dispatch ───────────────────────────────────────────────────────────────────
 
     def handle(self, cmd: dict) -> dict:
         op = cmd.get("cmd", "")
@@ -176,7 +178,7 @@ class Daemon:
         except Exception as exc:
             return {**self._base_resp(), "ok": False, "error": str(exc)}
 
-    # ── existing commands (unchanged) ──────────────────────────────────────
+    # ── existing commands (unchanged) ───────────────────────────────────────────────────────────────────────
 
     def _cmd_status(self, cmd: dict) -> dict:
         return {**self._base_resp(), "ok": True}
@@ -266,6 +268,16 @@ class Daemon:
 
     def _cmd_mem_alloc(self, cmd: dict) -> dict:
         result = self.api.alloc_memory(cmd["size"])
+        return {**self._base_resp(), **result}
+
+    def _cmd_call(self, cmd: dict) -> dict:
+        result = self.api.call_function(
+            cmd["addr"],
+            cmd.get("abi", "default"),
+            cmd.get("retType", "void"),
+            cmd.get("argTypes", []),
+            cmd.get("argValues", []),
+        )
         return {**self._base_resp(), **result}
 
     def _cmd_disasm(self, cmd: dict) -> dict:
@@ -409,7 +421,7 @@ class Daemon:
         self._running = False
         return {**self._base_resp(), "ok": True, "msg": "detaching"}
 
-    # ── NEW: trace ─────────────────────────────────────────────────────────
+    # ── NEW: trace ────────────────────────────────────────────────────────────────────────────────────
 
     def _cmd_trace(self, cmd: dict) -> dict:
         addr = cmd["addr"]
@@ -457,8 +469,12 @@ class Daemon:
         if output:
             p = Path(output) if os.path.isabs(output) else self._resolve_output_path(output)
             with open(p, "w", encoding="utf-8") as f:
-                for s in samples:
-                    f.write(json.dumps(s) + "\n")
+                if samples:
+                    chunk_size = 50000
+                    for i in range(0, len(samples), chunk_size):
+                        chunk = samples[i:i + chunk_size]
+                        f.write("\n".join(json.dumps(s) for s in chunk))
+                        f.write("\n")
 
         hook_diag = {"addr": addr, "hookVerified": result.get("hookVerified"),
                      "prologue": result.get("prologue")}
@@ -466,7 +482,7 @@ class Daemon:
                 "count": len(samples), "output": str(output) if output else None,
                 "hookDiag": hook_diag}
 
-    # ── NEW: collect ───────────────────────────────────────────────────────
+    # ── NEW: collect ──────────────────────────────────────────────────────────────────────────────────────
 
     def _cmd_collect(self, cmd: dict) -> dict:
         addrs = cmd.get("addrs", [])
@@ -563,7 +579,7 @@ class Daemon:
                 "fenceCount": self.api.get_fence_counter(),
                 "hookDiags": hook_diags}
 
-    # ── NEW: steptrace ─────────────────────────────────────────────────────
+    # ── NEW: steptrace ────────────────────────────────────────────────────────────────────────────────────
 
     def _cmd_steptrace(self, cmd: dict) -> dict:
         addr = cmd["addr"]
@@ -594,7 +610,7 @@ class Daemon:
         return {**self._base_resp(), "ok": True, "trace": trace_data,
                 "output": str(output) if output else None}
 
-    # ── NEW: modules ───────────────────────────────────────────────────────
+    # ── NEW: modules ─────────────────────────────────────────────────────────────────────────────────────
 
     def _cmd_modules(self, cmd: dict) -> dict:
         modules = self.api.enumerate_modules()
@@ -604,7 +620,7 @@ class Daemon:
                        or filt in m.get("path", "").lower()]
         return {**self._base_resp(), "ok": True, "modules": modules}
 
-    # ── visibility override ────────────────────────────────────────────────
+    # ── visibility override ────────────────────────────────────────────────────────────────────────────
 
     def _cmd_vishook_on(self, cmd: dict) -> dict:
         threshold = cmd["threshold"]
@@ -621,7 +637,7 @@ class Daemon:
         result = self.api.get_vis_stats()
         return {**self._base_resp(), "ok": True, **result}
 
-    # ── DIP counter ────────────────────────────────────────────────────────
+    # ── DIP counter ──────────────────────────────────────────────────────────────────────────────────
 
     def _cmd_dipcnt_on(self, cmd: dict) -> dict:
         dev_ptr_addr = cmd["devPtrAddr"]
@@ -641,7 +657,7 @@ class Daemon:
         result = self.api.sample_dip_callers(count)
         return {**self._base_resp(), "ok": True, **result}
 
-    # ── memory write watchpoint ─────────────────────────────────────────────
+    # ── memory write watchpoint ────────────────────────────────────────────────────────────────────────────
 
     def _cmd_memwatch_start(self, cmd: dict) -> dict:
         addr = cmd["addr"]
@@ -658,7 +674,7 @@ class Daemon:
         result = self.api.get_mem_watch_hits()
         return {**self._base_resp(), **result}
 
-    # ── TCP server ─────────────────────────────────────────────────────────
+    # ── TCP server ──────────────────────────────────────────────────────────────────────────────────
 
     def serve(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -667,10 +683,14 @@ class Daemon:
         srv.listen(4)
         srv.settimeout(1.0)
 
-        STATE_FILE.write_text(json.dumps({
+        state_data = json.dumps({
             "pid": os.getpid(), "port": PORT,
             "target": self.target_name, "targetPid": self.pid,
-        }))
+            "token": self.auth_token,
+        })
+        fd = os.open(str(STATE_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(state_data)
 
         print(f"[livetools daemon] listening on {HOST}:{PORT}, "
               f"target={self.target_name} pid={self.pid}")
@@ -689,7 +709,19 @@ class Daemon:
 
     def _handle_conn(self, conn: socket.socket) -> None:
         try:
-            conn.settimeout(300)
+            conn.settimeout(5.0)
+            token_data = b""
+            while len(token_data) < 32:
+                chunk = conn.recv(32 - len(token_data))
+                if not chunk:
+                    break
+                token_data += chunk
+
+            if len(token_data) != 32 or not secrets.compare_digest(token_data.decode("ascii", errors="ignore"), self.auth_token):
+                self._send_raw(conn, json.dumps({"ok": False, "error": "Unauthorized"}).encode())
+                return
+
+            conn.settimeout(300.0)
             data = self._recv_raw(conn)
             cmd = json.loads(data)
             resp = self.handle(cmd)

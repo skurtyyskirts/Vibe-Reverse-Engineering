@@ -285,13 +285,16 @@ def propagate_cfg(
         ordered.remove(entry)
         ordered.insert(0, entry)
 
+    # Precalculate predecessors for faster inner loop
+    ordered_preds = [(bva, preds.get(bva, [])) for bva in ordered]
+
     # Iterate to fixed point
     block_exit: dict[int, dict[str, object]] = {}
     for _ in range(max_iterations):
         changed = False
-        for bva in ordered:
+        for bva, bva_preds in ordered_preds:
             # Merge predecessor exit states
-            pred_states = [block_exit[p] for p in preds.get(bva, []) if p in block_exit]
+            pred_states = [block_exit[p] for p in bva_preds if p in block_exit]
             if bva == entry:
                 entry_state = _init_state()
                 if pred_states:

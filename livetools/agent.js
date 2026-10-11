@@ -994,6 +994,22 @@ rpc.exports = {
             return { ok: true, addr: ptrToHex(p) };
         } catch (e) { return { ok: false, msg: e.message }; }
     },
+    callFunction: function (addrStr, abi, retType, argTypes, argValues) {
+        try {
+            var fn = new NativeFunction(ptr(addrStr), retType, argTypes, abi);
+            var args = [];
+            for (var i = 0; i < argValues.length; i++) {
+                var v = argValues[i];
+                if (typeof v === 'string' && v.indexOf('0x') === 0) {
+                    args.push(ptr(v));
+                } else {
+                    args.push(v);
+                }
+            }
+            var result = fn.apply(null, args);
+            return { ok: true, result: result ? result.toString() : '0' };
+        } catch (e) { return { ok: false, msg: e.message }; }
+    },
 
     // disassembly
     disasmAt: function (addrStr, count) {

@@ -20,11 +20,12 @@ from pathlib import Path
 
 import frida
 
+from retools.workspace import game_dir
+
 HOST = "127.0.0.1"
 PORT = 27042
 STATE_FILE = Path(__file__).parent / ".state.json"
 AGENT_JS = Path(__file__).parent / "agent.js"
-WORKSPACE = Path(__file__).resolve().parent.parent
 
 
 class Daemon:
@@ -162,7 +163,7 @@ class Daemon:
 
     def _resolve_output_path(self, filename: str) -> Path:
         exe = Path(self.target_name).stem
-        traces_dir = WORKSPACE / "patches" / exe / "traces"
+        traces_dir = game_dir(exe) / "traces"
         traces_dir.mkdir(parents=True, exist_ok=True)
         return traces_dir / filename
 

@@ -18,3 +18,6 @@ dependencies = { file = ["requirements.txt"] }
 # are exposed; tests/, tools/ and docs stay private to this repo.
 [tool.setuptools.packages.find]
 include = ["retools*", "livetools*", "graphics*", "rtx_remix_tools*", "autonomy*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

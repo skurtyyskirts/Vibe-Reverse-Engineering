@@ -21,7 +21,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-_PROJECT = Path(__file__).resolve().parent.parent
+from retools.workspace import game_dir
+
 
 SCHEMA_VERSION = 1
 
@@ -198,7 +199,7 @@ class GameIndex:
     @staticmethod
     def default_db_path(game: str) -> str:
         """Canonical index.db for a game *name* (used by the name-only CLIs)."""
-        return str(_PROJECT / "patches" / game / "index.db")
+        return str(game_dir(game) / "index.db")
 
     @staticmethod
     def resolve_db(game: str, db: str | None = None) -> str:

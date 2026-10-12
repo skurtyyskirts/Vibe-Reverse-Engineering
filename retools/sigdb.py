@@ -443,15 +443,21 @@ class SignatureDB:
     def _open(self):
         self._conn = sqlite3.connect(self._path)
         self._conn.row_factory = sqlite3.Row
-        cur = self._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-        )
-        if cur.fetchone() is None:
-            self._init_schema()
-        else:
-            row = self._conn.execute("SELECT version FROM schema_version").fetchone()
-            if row is None or row[0] != SCHEMA_VERSION:
-                self._migrate(row[0] if row else 0)
+        try:
+            cur = self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
+            )
+            if cur.fetchone() is None:
+                self._init_schema()
+            else:
+                row = self._conn.execute("SELECT version FROM schema_version").fetchone()
+                if row is None or row[0] != SCHEMA_VERSION:
+                    self._migrate(row[0] if row else 0)
+        except Exception:
+            # Release the file before propagating: Windows cannot delete or replace an open DB.
+            self._conn.close()
+            self._conn = None
+            raise
 
     def _migrate(self, from_version: int):
         if from_version > SCHEMA_VERSION:
@@ -833,7 +839,7 @@ def build_from_manifest(db, manifest: dict) -> int:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Signature database for TRL reverse engineering"
+        description="Function signature database for library identification"
     )
     sub = ap.add_subparsers(dest="command", required=True)
 

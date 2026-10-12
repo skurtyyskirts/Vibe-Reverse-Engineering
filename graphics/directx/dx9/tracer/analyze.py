@@ -1182,7 +1182,7 @@ def do_hash_stability(records: list[dict]) -> None:
 
     The trace has no vertex bytes, so this reports *risk factors* visible in
     the API stream plus cross-frame draw diffing. Verify at runtime with the
-    geometry-hash debug view (rtx.debugView.debugViewIdx = 277): unstable
+    geometry-hash debug view (rtx.debugView.debugViewIdx = 10): unstable
     hashes show as per-frame color flicker (livetools screenshot diff).
     """
     # Decl elements and buffer usage flags, when creation happened in-capture
@@ -1340,7 +1340,7 @@ def do_hash_stability(records: list[dict]) -> None:
     if not any(flagged.values()):
         print("    - No API-level risk factors found; geometry hashes should "
               "be stable under the default rule")
-    print("    - Verify live: preset 'debug-geometry-hash' (view 277), then "
+    print("    - Verify live: preset 'debug-geometry-hash' (view 10), then "
           "screenshot two idle frames and diff — color flicker on static "
           "geometry means unstable hashes")
 

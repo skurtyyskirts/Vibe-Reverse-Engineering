@@ -9,7 +9,7 @@ Run all commands from the repo root: `python -m livetools <command> <args>`
 ## Session Management
 
 ```bash
-python -m livetools attach trl.exe        # attach to running process by name
+python -m livetools attach game.exe       # attach to running process by name
 python -m livetools attach game.exe --spawn  # launch, instrument, then resume (catches init code)
 python -m livetools status                # check current connection
 python -m livetools detach                # end session
@@ -66,7 +66,7 @@ python -m livetools mem write 0x407150 C3
 
 ## Static vs. Runtime Addresses
 
-For 32-bit games without ASLR (most Win32 games including TRL), the PE preferred base matches the runtime load address — static addresses from `retools` work directly with `livetools`.
+For 32-bit games without ASLR (most Win32 games), the PE preferred base matches the runtime load address — static addresses from `retools` work directly with `livetools`.
 
 For DLLs or ASLR-enabled executables:
 ```bash

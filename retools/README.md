@@ -36,19 +36,19 @@ Run all tools from the repo root: `python -m retools.<tool> <args>`
 
 ```bash
 # Decompile a function (always include --types for richer output)
-python -m retools.decompiler trl.exe 0x407150 --types patches/TombRaiderLegend/kb.h
+python -m retools.decompiler game.exe 0x401000 --types patches/MyGame/kb.h
 
 # Find all callers of an address
-python -m retools.callgraph trl.exe 0x407150 --up 3
+python -m retools.callgraph game.exe 0x401000 --up 3
 
 # Search for strings and the code that references them
-python -m retools.search trl.exe strings -f "render" --xrefs
+python -m retools.search game.exe strings -f "render" --xrefs
 
 # Identify compiler version
-python -m retools.sigdb fingerprint trl.exe
+python -m retools.sigdb fingerprint game.exe
 
 # Bootstrap a new binary (seeds KB with RTTI, signatures, compiler info)
-python -m retools.bootstrap trl.exe --project TombRaiderLegend
+python -m retools.bootstrap game.exe --project patches/MyGame
 ```
 
 ---

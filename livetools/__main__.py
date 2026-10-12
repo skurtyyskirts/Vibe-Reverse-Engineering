@@ -147,7 +147,8 @@ def _spawn_daemon(target: str, *, spawn: bool = False) -> None:
             resp = client.send_command({"cmd": "status"})
             print(client.format_status_line(resp))
             print(f"Attached to {target}.")
-            client.DAEMON_LOG.unlink(missing_ok=True)
+            # The log is the running daemon's stderr, so it stays; the next attach truncates it.
+            # (Windows cannot delete a file another process holds open.)
             return
         time.sleep(0.3)
 
@@ -159,7 +160,6 @@ def _spawn_daemon(target: str, *, spawn: bool = False) -> None:
         pass
     if log_text:
         print(f"[error] Daemon log:\n{log_text}", file=sys.stderr)
-    client.DAEMON_LOG.unlink(missing_ok=True)
     sys.exit(1)
 
 

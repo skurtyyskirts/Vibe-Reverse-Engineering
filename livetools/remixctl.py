@@ -14,7 +14,7 @@ in `.claude/references/remix-compat-catalog.md`.
 Usage (CLI):
     python -m livetools remix status --game-dir "C:/Games/MyGame"
     python -m livetools remix conf get [KEY] --game-dir DIR
-    python -m livetools remix conf set rtx.debugView.debugViewIdx 277 --game-dir DIR
+    python -m livetools remix conf set rtx.debugView.debugViewIdx 10 --game-dir DIR
     python -m livetools remix conf unset rtx.debugView.debugViewIdx --game-dir DIR
     python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD --game-dir DIR
     python -m livetools remix conf remove-hash rtx.uiTextures 0x1234ABCD --game-dir DIR
@@ -61,23 +61,25 @@ _BRIDGE_ALT = Path(".trex") / "bridge.conf"
 # Remix developer menu hotkey (rtx.remixMenuKeyBinds default: ALT,X)
 MENU_CHORD = "ALT+X"
 
-# Debug view indices from dxvk-remix debug_view_indices.h
+# Debug view indices, read from the debug-view registration table of the shipped dxvk-remix
+# 08e8f1b7 runtime (Remix 1329). Indices shift between runtime versions — re-verify against the
+# Remix menu's Debug View list when targeting another build. "geometry-hash" (10) is the asset
+# hash; "primitive-index-hash" (277) reorders every frame and flickers even when hashes are stable.
 DEBUG_VIEWS = {
     "disabled": 0,
-    "primitive-index": 1,
-    "position": 11,
-    "texcoords": 12,
-    "geometry-normal": 15,
-    "shading-normal": 16,
-    "virtual-shading-normal": 17,
-    "vertex-color": 18,
-    "albedo": 23,
-    "raw-albedo": 32,
-    "white-noise": 41,
-    "is-emissive": 180,
-    "is-particle": 181,
-    "primitive-index-hash": 276,
-    "geometry-hash": 277,
+    "is-particle": 8,
+    "geometry-hash": 10,
+    "position": 12,
+    "shading-normal": 17,
+    "virtual-shading-normal": 18,
+    "vertex-color": 19,
+    "albedo": 32,
+    "raw-albedo": 33,
+    "white-noise": 42,
+    "texcoords": 55,
+    "is-emissive": 181,
+    "primitive-index": 276,
+    "primitive-index-hash": 277,
 }
 
 # Hash-set options (comma-separated 0x hashes). Used by add-hash/remove-hash
@@ -128,10 +130,10 @@ PRESETS: dict[str, dict] = {
         }},
     },
     "debug-geometry-hash": {
-        "description": "Color geometry by hash (view 277). Flicker across "
-                       "identical frames = unstable hashes.",
+        "description": "Color geometry by asset hash (view 10). A recolor on "
+                       "static geometry at a still camera = unstable hashes.",
         "options": {"rtx": {
-                "rtx.debugView.debugViewIdx": "277",
+                "rtx.debugView.debugViewIdx": "10",
         }},
     },
     "debug-off": {

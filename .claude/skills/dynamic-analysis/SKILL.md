@@ -292,7 +292,7 @@ Detect the Remix runtime, edit rtx.conf (idempotent, auto-backup, comments prese
 
 ```bash
 python -m livetools remix status -d C:/Games/MyGame        # runtime markers, rtx.conf, logs
-python -m livetools remix conf set rtx.debugView.debugViewIdx 277 -d <DIR>
+python -m livetools remix conf set rtx.debugView.debugViewIdx 10 -d <DIR>   # 10 = Geometry Hash (08e8f1b7 runtime)
 python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD -d <DIR>
 python -m livetools remix preset apply debug-geometry-hash -d <DIR>   # preset list: devmenu, debug-*, hash-*, fallback-light-*, vertex-capture
 python -m livetools remix menu --exe game.exe              # send ALT+X, screenshot to verify

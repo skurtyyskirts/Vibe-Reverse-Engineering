@@ -21,7 +21,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from retools.workspace import game_dir
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from workspace import game_dir  # flat sibling import, like the other retools modules
 
 
 SCHEMA_VERSION = 1

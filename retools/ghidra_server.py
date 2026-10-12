@@ -27,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ghidra_client import HOST, PORT, state_path, _recv_raw, _send_raw
 import pyghidra_backend as pb
-from retools.workspace import game_dir
+from workspace import game_dir
 
 
 

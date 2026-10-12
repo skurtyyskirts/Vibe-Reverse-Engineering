@@ -407,33 +407,25 @@ def cmd_build(spec_path: Path, vcvarsall: Path) -> None:
 
     entry = "DllMain@12" if arch == "x86" else "DllMain"
 
-    compile_cmd = (
-        f'call "{vcvarsall}" {arch} >nul 2>&1'
-        f" && cl.exe /nologo /O1 /GS- /W3 /Zl"
-        f' /D "WIN32" /D "NDEBUG"'
-        f' /c /Fo"{obj_path}" "{c_path}"'
+    # The MSVC environment only exists inside the cmd session that ran vcvarsall, so compile and
+    # link run from one generated batch file. Passing a quoted command string to `cmd.exe /c`
+    # through subprocess breaks: Python escapes the inner quotes as \" and cmd.exe misreads them.
+    build_bat = out_dir / f"_build_{name}.bat"
+    build_bat.write_text(
+        "@echo off\r\n"
+        f'call "{vcvarsall}" {arch} >nul 2>&1 || exit /b 1\r\n'
+        f'cl.exe /nologo /O1 /GS- /W3 /Zl /D "WIN32" /D "NDEBUG" /c /Fo"{obj_path}" "{c_path}" || exit /b 2\r\n'
+        f'link.exe /nologo /DLL /NODEFAULTLIB /ENTRY:{entry} /OUT:"{asi_path}" "{obj_path}" kernel32.lib'
+        " || exit /b 3\r\n",
+        encoding="mbcs",
     )
-    r1 = subprocess.run(
-        ["cmd.exe", "/c", compile_cmd], shell=False, capture_output=True, text=True
-    )
-    if r1.returncode != 0:
-        print(r1.stdout)
-        print(r1.stderr, file=sys.stderr)
-        raise SystemExit(f"Compile failed (exit {r1.returncode})")
-
-    link_cmd = (
-        f'call "{vcvarsall}" {arch} >nul 2>&1'
-        f" && link.exe /nologo /DLL /NODEFAULTLIB"
-        f" /ENTRY:{entry}"
-        f' /OUT:"{asi_path}" "{obj_path}" kernel32.lib'
-    )
-    r2 = subprocess.run(
-        ["cmd.exe", "/c", link_cmd], shell=False, capture_output=True, text=True
-    )
-    if r2.returncode != 0:
-        print(r2.stdout)
-        print(r2.stderr, file=sys.stderr)
-        raise SystemExit(f"Link failed (exit {r2.returncode})")
+    result = subprocess.run(["cmd.exe", "/c", str(build_bat)], capture_output=True, text=True)
+    build_bat.unlink(missing_ok=True)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr, file=sys.stderr)
+        stage = {1: "vcvarsall", 2: "Compile", 3: "Link"}.get(result.returncode, "Build")
+        raise SystemExit(f"{stage} failed (exit {result.returncode})")
 
     # clean intermediates
     obj_path.unlink(missing_ok=True)

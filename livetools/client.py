@@ -69,7 +69,8 @@ def _kill_stale_daemon(state: dict) -> None:
     daemon_pid = state.get("pid")
     if daemon_pid:
         try:
-            import os, signal
+            import os
+            import signal
             os.kill(daemon_pid, signal.SIGTERM)
         except (OSError, ProcessLookupError):
             pass
@@ -108,6 +109,9 @@ def send_command(cmd: dict, timeout: float | None = None) -> dict:
     if timeout is not None:
         sock.settimeout(timeout + 10)
     try:
+        token = state.get("token", "").ljust(32, "0")[:32] if state else "0" * 32
+        sock.sendall(token.encode("ascii"))
+
         _send_raw(sock, json.dumps(cmd).encode())
         return json.loads(_recv_raw(sock))
     finally:
@@ -260,7 +264,7 @@ def format_trace(resp: dict) -> str:
             insns = p.get("insns", [])
             desc = ", ".join(f"{i['mnemonic']} {i['opStr']} [{i['size']}B]" for i in insns[:4])
             lines.append("")
-            lines.append(f"  [WARN] 0 samples — function may be dead/inlined, or game window not focused")
+            lines.append("  [WARN] 0 samples — function may be dead/inlined, or game window not focused")
             lines.append(f"    prologue={p.get('totalBytes', '?')}B (need {p.get('needed', '?')}B), "
                          f"insns=[{desc}]")
 
@@ -350,7 +354,7 @@ def format_collect(resp: dict) -> str:
     total = resp.get("totalRecords", 0)
     output = resp.get("output", "?")
     fence = resp.get("fenceCount", 0)
-    lines.append(f"=== COLLECT COMPLETE ===")
+    lines.append("=== COLLECT COMPLETE ===")
     lines.append(f"  Records: {total}")
     lines.append(f"  Intervals (fences): {fence}")
     lines.append(f"  Output: {output}")
@@ -419,7 +423,6 @@ def format_mem_read(addr: int, raw: bytes, as_type: str | None = None) -> str:
 
 
 def _interpret_as(addr: int, raw: bytes, dtype: str) -> str:
-    import struct as st
 
     if dtype == "float32":
         return f"As float32: [{', '.join(f'{v:12.6f}' for v in _unpack_all(raw, '<f', 4))}]"

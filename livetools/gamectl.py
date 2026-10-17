@@ -52,9 +52,10 @@ INPUT_KEYBOARD       = 1
 INPUT_MOUSE          = 0
 KEYEVENTF_KEYUP      = 0x0002
 KEYEVENTF_EXTENDEDKEY = 0x0001
+
+MOUSEEVENTF_MOVE     = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP   = 0x0004
-MOUSEEVENTF_MOVE     = 0x0001
 SW_RESTORE           = 9
 SW_SHOW              = 5
 GW_OWNER             = 4
@@ -97,6 +98,9 @@ VK_MAP: dict[str, int] = {
     "NUMPAD0": 0x60, "NUMPAD1": 0x61, "NUMPAD2": 0x62, "NUMPAD3": 0x63,
     "NUMPAD4": 0x64, "NUMPAD5": 0x65, "NUMPAD6": 0x66, "NUMPAD7": 0x67,
     "NUMPAD8": 0x68, "NUMPAD9": 0x69,
+    # Punctuation / OEM keys
+    ";": 0xBA, "=": 0xBB, ",": 0xBC, "-": 0xBD, ".": 0xBE, "/": 0xBF,
+    "`": 0xC0, "[": 0xDB, "\\": 0xDC, "]": 0xDD, "'": 0xDE,
 }
 
 # ── SendInput structures ───────────────────────────────────────────────────

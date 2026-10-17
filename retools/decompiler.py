@@ -152,7 +152,8 @@ def decompile(binary: str, va: int, *, backend: str = "auto",
             result = ghidra_decompile(ghidra_dir, binary, va)
             if not result.startswith("[error]"):
                 return result
-            # pyghidra error in auto mode -- fall through to r2ghidra
+            print(f"[decompiler] Ghidra backend failed ({result.strip()}); "
+                  "falling back to r2ghidra", file=sys.stderr)
     # -- end pyghidra routing (fall through to r2ghidra) --
 
     r2_bin = _find_r2_bin()
@@ -206,7 +207,8 @@ def main() -> None:
         "-b", "--backend",
         choices=["auto", "ghidra", "pyhidra", *_BACKEND_CMDS],
         default="auto",
-        help="Decompiler backend (default: auto – tries pdg then pdc)",
+        help="Decompiler backend (default: auto – the Ghidra project when --project has one, "
+             "else pdg then pdc)",
     )
     p.add_argument(
         "-A", "--full-analysis",

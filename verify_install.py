@@ -6,10 +6,8 @@ Usage:
 """
 
 import importlib
-import io
 import os
 import shutil
-import struct
 import subprocess
 import sys
 import zipfile

@@ -136,7 +136,13 @@ class TestByteExtraction:
             code[i] = 0x90
 
         mock_b = MagicMock()
-        mock_b.read_va.return_value = bytes(code)
+        def mock_read_va(va, size):
+            # 0x1000 is our base
+            offset = va - 0x1000
+            if offset < 0 or offset >= len(code):
+                return b""
+            return bytes(code[offset:offset+size])
+        mock_b.read_va.side_effect = mock_read_va
         # Mock disasm to return enough instructions to estimate func size
         mock_insn = MagicMock()
         mock_insn.mnemonic = "ret"
@@ -158,6 +164,112 @@ class TestByteExtraction:
         assert mask[11:15] == b"\x00\x00\x00\x00"
         # Byte 0 (E8 opcode) should NOT be wildcarded
         assert mask[0] == 0xFF
+
+        # Verify func_size and tail_crc
+        # _estimate_func_size finds 'ret' at 0x1000 + 50 (size 1). 2 nops follow.
+        # So last_ret_end is 50 + 1 = 51.
+        assert func_size == 51
+
+        import zlib
+        # For a function of size 51, tail offset is max(0, 51 - 32) = 19
+        # Tail bytes should be code[19:51]
+        expected_tail = bytes(code[19:51])
+        expected_crc = zlib.crc32(expected_tail) & 0xFFFFFFFF
+        assert tail_crc == expected_crc
+
+    def test_extract_tail_crc_correctness(self):
+        """Verify tail_crc calculation perfectly matches expectations."""
+        from sigdb import extract_byte_sig
+        import zlib
+
+        # 100 bytes of dummy code
+        code = bytearray([i % 256 for i in range(100)])
+
+        mock_b = MagicMock()
+        def mock_read_va(va, size):
+            offset = va - 0x1000
+            if offset < 0 or offset >= len(code):
+                return b""
+            return bytes(code[offset:offset+size])
+        mock_b.read_va.side_effect = mock_read_va
+
+        # Mock disasm to report a func size of exactly 80 bytes
+        mock_insn = MagicMock()
+        mock_insn.mnemonic = "ret"
+        mock_insn.address = 0x1000 + 79
+        mock_insn.size = 1
+        mock_insn.op_str = ""
+        nop_insn = MagicMock()
+        nop_insn.mnemonic = "nop"
+        nop_insn.address = 0x1000 + 80
+        nop_insn.size = 1
+
+        mock_b.disasm.return_value = [mock_insn, nop_insn, nop_insn]
+
+        result = extract_byte_sig(mock_b, 0x1000)
+        assert result is not None
+        _, _, tail_crc, func_size = result
+
+        assert func_size == 80
+        # For function of size 80, tail starts at max(0, 80 - 32) = 48
+        expected_tail = bytes(code[48:80])
+        expected_crc = zlib.crc32(expected_tail) & 0xFFFFFFFF
+        assert tail_crc == expected_crc
+
+    def test_estimate_func_size_edges(self):
+        """Test _estimate_func_size edge cases via extract_byte_sig."""
+        from sigdb import extract_byte_sig
+
+        code = bytearray([0x90] * 64)
+        mock_b = MagicMock()
+        def mock_read_va(va, size):
+            return bytes(code[:size])
+        mock_b.read_va.side_effect = mock_read_va
+
+        # Edge 1: empty disasm
+        mock_b.disasm.return_value = []
+        result = extract_byte_sig(mock_b, 0x1000)
+        assert result is not None
+        assert result[3] == 0  # func_size == 0
+
+        # Edge 2: int3 after ret
+        ret_insn = MagicMock()
+        ret_insn.mnemonic = "ret"
+        ret_insn.address = 0x1000 + 10
+        ret_insn.size = 1
+        int3_insn = MagicMock()
+        int3_insn.mnemonic = "int3"
+        int3_insn.address = 0x1000 + 11
+        int3_insn.size = 1
+        mock_b.disasm.return_value = [ret_insn, int3_insn]
+        result = extract_byte_sig(mock_b, 0x1000)
+        assert result is not None
+        assert result[3] == 11  # stopped at int3, func size 10 + 1 = 11
+
+        # Edge 3: resetting nop run with unrelated instruction
+        nop_insn = MagicMock()
+        nop_insn.mnemonic = "nop"
+        nop_insn.address = 0x1000 + 11
+        nop_insn.size = 1
+        mov_insn = MagicMock()
+        mov_insn.mnemonic = "mov"
+        mov_insn.address = 0x1000 + 12
+        mov_insn.size = 2
+        mock_b.disasm.return_value = [ret_insn, nop_insn, mov_insn, nop_insn, nop_insn]
+        result = extract_byte_sig(mock_b, 0x1000)
+        assert result is not None
+        assert result[3] == 11  # The real function ended at ret (11) because nop run was interrupted by mov
+        # The function ends at ret (11) because the nop run was interrupted by mov
+
+        # Edge 4: missing ret, just ends
+        mov1_insn = MagicMock()
+        mov1_insn.mnemonic = "mov"
+        mov1_insn.address = 0x1000 + 0
+        mov1_insn.size = 2
+        mock_b.disasm.return_value = [mov1_insn]
+        result = extract_byte_sig(mock_b, 0x1000)
+        assert result is not None
+        assert result[3] == 2  # (insns[-1].address + insns[-1].size - va) = 0x1000 + 0 + 2 - 0x1000 = 2
 
     def test_extract_returns_none_for_unreadable(self):
         from sigdb import extract_byte_sig

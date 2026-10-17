@@ -21,8 +21,14 @@ Radare2 (used by the decompiler) is bundled in `tools/` for Windows -- no separa
 ```bash
 python -m venv .venv
 .\.venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 ```
+
+`pip install -e .` installs the requirements and makes `retools`, `livetools`, `graphics` and `rtx_remix_tools`
+importable from any directory, so one checkout serves every game project: run `python -m retools.<tool>` from the
+project's root, and per-game data (`patches/<Game>/` — kb.h, Ghidra project, index.db, traces) resolves against
+that directory. Install it **editable** only: the tools load non-Python files (Frida `agent.js`, the tracer DLL,
+`tools/` binaries) from this checkout, and a regular install would leave them out.
 
 ## Tools
 
@@ -75,7 +81,7 @@ python -m autonomy report MyGame --out patches/MyGame/findings.md
 
 Commands the loop branches on return exit codes: 0 succeeded, 1 the command failed, 3 it ran and the answer was no (game unhealthy, frame black, nothing changed, approach exhausted).
 
-**RTX Remix FFP template** (`rtx_remix_tools/dx/dx9_ffp_template/`) is a D3D9 proxy DLL that converts shader-based games to fixed-function pipeline for RTX Remix compatibility.
+**RTX Remix FFP proxy template** (`rtx_remix_tools/dx/remix-comp-proxy/`) is a D3D9 proxy DLL that converts shader-based games to fixed-function pipeline for RTX Remix compatibility (see the `dx9-ffp-port` skill).
 
 ## How it works
 

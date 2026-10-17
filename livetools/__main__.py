@@ -147,7 +147,8 @@ def _spawn_daemon(target: str, *, spawn: bool = False) -> None:
             resp = client.send_command({"cmd": "status"})
             print(client.format_status_line(resp))
             print(f"Attached to {target}.")
-            client.DAEMON_LOG.unlink(missing_ok=True)
+            # The log is the running daemon's stderr, so it stays; the next attach truncates it.
+            # (Windows cannot delete a file another process holds open.)
             return
         time.sleep(0.3)
 
@@ -159,7 +160,6 @@ def _spawn_daemon(target: str, *, spawn: bool = False) -> None:
         pass
     if log_text:
         print(f"[error] Daemon log:\n{log_text}", file=sys.stderr)
-    client.DAEMON_LOG.unlink(missing_ok=True)
     sys.exit(1)
 
 
@@ -324,6 +324,37 @@ def cmd_mem_alloc(args: argparse.Namespace) -> None:
         print(f"Allocated {args.size} bytes at {resp['addr']} (rwx)")
     else:
         print(f"[error] {resp.get('error', resp.get('msg', 'unknown'))}")
+
+
+def _parse_call_value(text: str) -> int | str:
+    """Hex strings stay strings (the agent reads them as pointers); decimals become ints."""
+    text = text.strip()
+    if text.startswith("0x"):
+        return text
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def cmd_call(args: argparse.Namespace) -> int:
+    """Call a native function inside the attached process via Frida NativeFunction."""
+    if not _require_attached():
+        return EXIT_FAILED
+    resp = client.send_command({
+        "cmd": "call",
+        "addr": _parse_addr(args.addr),
+        "abi": args.abi,
+        "retType": args.ret_type,
+        "argTypes": args.arg_types.split(",") if args.arg_types else [],
+        "argValues": [_parse_call_value(v) for v in args.arg_values.split(",")] if args.arg_values else [],
+    })
+    print(client.format_status_line(resp))
+    if not resp.get("ok"):
+        print(f"[error] {resp.get('msg', resp.get('error', 'unknown'))}")
+        return EXIT_FAILED
+    print(f"Call returned: {resp.get('result', '(void)')}")
+    return 0
 
 
 def cmd_disasm(args: argparse.Namespace) -> None:
@@ -1252,6 +1283,17 @@ def build_parser() -> argparse.ArgumentParser:
     ma = mem_sub.add_parser("alloc", help="Allocate rwx memory in target process")
     ma.add_argument("size", type=int, help="Number of bytes to allocate")
 
+    sp = sub.add_parser("call", help="Call a native function in the target process")
+    sp.add_argument("addr", help="Function address in hex")
+    sp.add_argument("--abi", default="default",
+        help="Calling convention (default, stdcall, thiscall, fastcall)")
+    sp.add_argument("--ret-type", default="void",
+        help="Return type (void, int32, pointer, ...)")
+    sp.add_argument("--arg-types", default="",
+        help="Comma-separated arg types (pointer,int32,...)")
+    sp.add_argument("--arg-values", default="",
+        help="Comma-separated arg values; 0x-prefixed values pass as pointers (0x10E5370,4,...)")
+
     sp = sub.add_parser("disasm",
         help="Disassemble instructions at address (default: current EIP/RIP)")
     sp.add_argument("addr", nargs="?", default=None, help="Start address in hex")
@@ -1969,6 +2011,7 @@ def main(argv: list[str] | None = None) -> int:
                          else cmd_mem_write(a) if getattr(a, "mem_action", None) == "write"
                          else cmd_mem_alloc(a) if getattr(a, "mem_action", None) == "alloc"
                          else print("Usage: python -m livetools mem [read|write|alloc]"),
+        "call": cmd_call,
         "disasm": cmd_disasm,
         "bt": cmd_bt,
         "step": cmd_step,

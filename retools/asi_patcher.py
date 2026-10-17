@@ -64,12 +64,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 # ── Spec loading & validation ───────────────────────────────────────────
 
 _C_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PATCH_TYPES = frozenset(("bytes", "code", "nop", "float",
-                          "double", "int32", "int64"))
+_PATCH_TYPES = frozenset(("bytes", "code", "nop", "float", "double", "int32", "int64"))
 
 
 def _load_spec(path: Path) -> dict:
@@ -78,9 +76,7 @@ def _load_spec(path: Path) -> dict:
 
     name = spec.get("name", "")
     if not _C_IDENT.match(name):
-        raise SystemExit(
-            f"spec.name must be a valid C identifier, got {name!r}"
-        )
+        raise SystemExit(f"spec.name must be a valid C identifier, got {name!r}")
 
     arch = spec.setdefault("arch", "x86")
     if arch not in ("x86", "x64"):
@@ -92,13 +88,9 @@ def _load_spec(path: Path) -> dict:
     for p in spec["patches"]:
         pn = p.get("name", "")
         if not _C_IDENT.match(pn):
-            raise SystemExit(
-                f"Patch name must be a valid C identifier, got {pn!r}"
-            )
+            raise SystemExit(f"Patch name must be a valid C identifier, got {pn!r}")
         if p.get("type") not in _PATCH_TYPES:
-            raise SystemExit(
-                f"Unknown patch type {p.get('type')!r} in {pn!r}"
-            )
+            raise SystemExit(f"Unknown patch type {p.get('type')!r} in {pn!r}")
 
     return spec
 
@@ -115,9 +107,7 @@ def _c_addr(addr_str: str, arch: str, base: int | None = None) -> str:
     val = int(addr_str, 16)
     if base is not None:
         if val < base:
-            raise ValueError(
-                f"address 0x{val:X} is below image base 0x{base:X}"
-            )
+            raise ValueError(f"address 0x{val:X} is below image base 0x{base:X}")
         rva = val - base
         d = 16 if arch == "x64" else 8
         return f"rva(0x{rva:0{d}X})"
@@ -416,21 +406,26 @@ def cmd_build(spec_path: Path, vcvarsall: Path) -> None:
     c_path.write_text(generate_c(spec), encoding="utf-8")
 
     entry = "DllMain@12" if arch == "x86" else "DllMain"
-    cmd = (
-        f'call "{vcvarsall}" {arch} >nul 2>&1'
-        f' && cl.exe /nologo /O1 /GS- /W3 /Zl'
-        f' /D "WIN32" /D "NDEBUG"'
-        f' /c /Fo"{obj_path}" "{c_path}"'
-        f' && link.exe /nologo /DLL /NODEFAULTLIB'
-        f' /ENTRY:{entry}'
-        f' /OUT:"{asi_path}" "{obj_path}" kernel32.lib'
-    )
 
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if r.returncode != 0:
-        print(r.stdout)
-        print(r.stderr, file=sys.stderr)
-        raise SystemExit(f"Build failed (exit {r.returncode})")
+    # The MSVC environment only exists inside the cmd session that ran vcvarsall, so compile and
+    # link run from one generated batch file. Passing a quoted command string to `cmd.exe /c`
+    # through subprocess breaks: Python escapes the inner quotes as \" and cmd.exe misreads them.
+    build_bat = out_dir / f"_build_{name}.bat"
+    build_bat.write_text(
+        "@echo off\r\n"
+        f'call "{vcvarsall}" {arch} >nul 2>&1 || exit /b 1\r\n'
+        f'cl.exe /nologo /O1 /GS- /W3 /Zl /D "WIN32" /D "NDEBUG" /c /Fo"{obj_path}" "{c_path}" || exit /b 2\r\n'
+        f'link.exe /nologo /DLL /NODEFAULTLIB /ENTRY:{entry} /OUT:"{asi_path}" "{obj_path}" kernel32.lib'
+        " || exit /b 3\r\n",
+        encoding="mbcs",
+    )
+    result = subprocess.run(["cmd.exe", "/c", str(build_bat)], capture_output=True, text=True)
+    build_bat.unlink(missing_ok=True)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr, file=sys.stderr)
+        stage = {1: "vcvarsall", 2: "Compile", 3: "Link"}.get(result.returncode, "Build")
+        raise SystemExit(f"{stage} failed (exit {result.returncode})")
 
     # clean intermediates
     obj_path.unlink(missing_ok=True)
@@ -463,8 +458,7 @@ def cmd_init(directory: Path) -> None:
         "verify": [],
         "patches": [],
     }
-    spec_path.write_text(json.dumps(skeleton, indent=2) + "\n",
-                         encoding="utf-8")
+    spec_path.write_text(json.dumps(skeleton, indent=2) + "\n", encoding="utf-8")
     print(f"[asi_patcher] Created {spec_path}")
 
 
@@ -502,18 +496,19 @@ def main() -> None:
         description=_BUILD_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    b.add_argument("spec", type=Path,
-                   help="Path to spec.json")
-    b.add_argument("--vcvarsall", type=Path, required=True,
-                   metavar="PATH",
-                   help="Path to vcvarsall.bat  (see: vswhere -latest)")
+    b.add_argument("spec", type=Path, help="Path to spec.json")
+    b.add_argument(
+        "--vcvarsall",
+        type=Path,
+        required=True,
+        metavar="PATH",
+        help="Path to vcvarsall.bat  (see: vswhere -latest)",
+    )
 
-    s = sub.add_parser("show",
-                       help="Print generated C source to stdout")
+    s = sub.add_parser("show", help="Print generated C source to stdout")
     s.add_argument("spec", type=Path, help="Path to spec.json")
 
-    i = sub.add_parser("init",
-                       help="Create a skeleton spec.json in a directory")
+    i = sub.add_parser("init", help="Create a skeleton spec.json in a directory")
     i.add_argument("directory", type=Path, help="Target directory")
 
     args = p.parse_args()

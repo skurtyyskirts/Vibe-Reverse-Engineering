@@ -16,7 +16,7 @@ import sys
 import struct
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "retools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dx9_common import (
     load_binary, load_text_section, find_text_section,

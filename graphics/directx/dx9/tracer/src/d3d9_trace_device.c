@@ -47,6 +47,10 @@ typedef struct TracedDevice {
 #define FLOATS_PER_VEC4      4
 
 static volatile int  g_capturing    = 0;
+/* EndScenes since the last Device::Present; past SWAPCHAIN_ONLY_SCENES the game is
+ * presenting through a swap chain and EndScene becomes the frame boundary. */
+#define SWAPCHAIN_ONLY_SCENES 64
+static volatile unsigned g_endScenesSincePresent = 0;
 static int           g_captureInit  = 0;
 static int           g_frameTarget  = 2;
 static int           g_currentFrame = 0;
@@ -498,8 +502,20 @@ static void trace_post(int slot, DWORD retval, DWORD *args) {
         }
     }
 
-    if (slot == SLOT_Present)
+    /* Device::Present is the frame boundary. Games that present through a swap
+     * chain (e.g. via dxwrapper) never call it, so after a long run of EndScenes
+     * with no Device::Present, EndScene stands in (one count per scene). Games
+     * that call Device::Present keep resetting the run, so their EndScenes —
+     * however many per frame — never double-count. */
+    if (slot == SLOT_Present) {
+        g_endScenesSincePresent = 0;
         trace_on_present();
+    } else if (slot == SLOT_EndScene) {
+        if (g_endScenesSincePresent < SWAPCHAIN_ONLY_SCENES)
+            g_endScenesSincePresent++;
+        else
+            trace_on_present();
+    }
 }
 
 /* ---- Frame boundary: called from Present wrapper ---- */

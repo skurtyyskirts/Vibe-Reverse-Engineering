@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibe-reverse-engineering"
+version = "0.1.0"
+description = "Static and live reverse-engineering toolkit (retools, livetools, dx9tracer, RTX Remix helpers)"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# Install once, editable, and every project on the machine shares this checkout:
+#   pip install -e <path-to-this-repo>
+# so `python -m retools.<tool>` works from any directory. Only the toolkit packages
+# are exposed; tests/, tools/ and docs stay private to this repo.
+[tool.setuptools.packages.find]
+include = ["retools*", "livetools*", "graphics*", "rtx_remix_tools*", "autonomy*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

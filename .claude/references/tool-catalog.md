@@ -197,7 +197,7 @@ These are fast first-pass scanners — they surface candidate addresses. Follow 
 
 ## Dynamic Analysis (`livetools/`) -- Frida-based, attaches to running process
 
-Main-agent only (requires a live process; static-analyzer subagents must not use these). Canonical command reference with syntax, read-spec format, and recipes: the `/dynamic-analysis` skill (`.claude/skills/dynamic-analysis/SKILL.md`). Covers attach/spawn, breakpoints, trace/steptrace/collect, mem read/write/alloc, scan, disasm, modules, dipcnt, memwatch, vishook, gamectl, screenshot, remix (RTX Remix runtime control), and offline `analyze`. `gamectl`, `screenshot`, and `remix` need no attached process.
+Main-agent only (requires a live process; static-analyzer subagents must not use these). Canonical command reference with syntax, read-spec format, and recipes: the `/dynamic-analysis` skill (`.claude/skills/dynamic-analysis/SKILL.md`). Covers attach/spawn, breakpoints, trace/steptrace/collect, mem read/write/alloc, call (invoke a native function in-process), scan, disasm, modules, dipcnt, memwatch, vishook, gamectl, screenshot, remix (RTX Remix runtime control), and offline `analyze`. `gamectl`, `screenshot`, and `remix` need no attached process.
 
 **NOTE**: Some processes require their window to be focused for traces to capture data.
 

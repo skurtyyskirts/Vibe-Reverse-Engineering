@@ -55,6 +55,7 @@ python -m livetools resume                    # unfreeze target
 ```
 python -m livetools mem write <addr> <hex>    # write bytes to live memory
 python -m livetools mem alloc <size>          # allocate rwx memory in target (for code caves)
+python -m livetools call <addr> [--abi stdcall|thiscall|fastcall] [--ret-type int32] [--arg-types pointer,int32] [--arg-values 0x10E5370,4]   # call a native function in-process
 python -m livetools scan <pattern> --range START:SIZE
 ```
 
@@ -291,7 +292,7 @@ Detect the Remix runtime, edit rtx.conf (idempotent, auto-backup, comments prese
 
 ```bash
 python -m livetools remix status -d C:/Games/MyGame        # runtime markers, rtx.conf, logs
-python -m livetools remix conf set rtx.debugView.debugViewIdx 277 -d <DIR>
+python -m livetools remix conf set rtx.debugView.debugViewIdx 10 -d <DIR>   # 10 = Geometry Hash (08e8f1b7 runtime)
 python -m livetools remix conf add-hash rtx.uiTextures 0x1234ABCD -d <DIR>
 python -m livetools remix preset apply debug-geometry-hash -d <DIR>   # preset list: devmenu, debug-*, hash-*, fallback-light-*, vertex-capture
 python -m livetools remix menu --exe game.exe              # send ALT+X, screenshot to verify

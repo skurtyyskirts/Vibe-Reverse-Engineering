@@ -14,7 +14,7 @@ import sys
 import struct
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "retools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -95,7 +95,7 @@ def main():
         if "d3dx" in dll.lower():
             for imp in entry.imports:
                 name = imp.name.decode() if imp.name else ""
-                if any(k in name for k in ["Shader", "Vertex", "Pixel", "Constant", "Effect"]):
+                if "Shader" in name or "Vertex" in name or "Pixel" in name or "Constant" in name or "Effect" in name:
                     iat_va2 = imp.address
                     iat_bytes2 = iat_va2.to_bytes(4, 'little')
                     call_pat2 = b'\xFF\x15' + iat_bytes2

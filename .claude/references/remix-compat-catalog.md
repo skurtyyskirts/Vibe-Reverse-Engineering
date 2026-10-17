@@ -99,16 +99,19 @@ False) overlays the view on the normal image.
 | Idx | View | Compatibility use |
 |-----|------|-------------------|
 | 0 | disabled | normal rendering |
-| 1 | primitive index | draw call coverage |
-| 11 | position | world-space sanity (zUp/sceneScale wrong ⇒ garbage) |
-| 12 | texcoords | UV correctness after FFP conversion |
-| 15 / 16 / 17 | geometry / shading / virtual shading normal | normal orientation problems (inside-out lighting) |
-| 18 | vertex color | vertex color pipeline |
-| 23 / 32 | albedo / raw albedo | texture binding correctness |
-| 41 | white noise | GPU pipeline aliveness |
-| 180 / 181 | is-emissive / is-particle | category tagging verification |
-| 276 | primitive index hash | per-primitive hash view |
-| 277 | **geometry hash** | **hash stability: colors geometry by hash — flicker on static geometry across frames = unstable hashes** |
+| 8 | is particle | category tagging verification |
+| 10 | **geometry hash** | **hash stability: colors geometry by asset hash — judge at a still camera; a recolor on static geometry = unstable hashes** |
+| 12 | position | world-space sanity (zUp/sceneScale wrong ⇒ garbage) |
+| 17 / 18 | shading / virtual shading normal | normal orientation problems (inside-out lighting) |
+| 19 | vertex color | vertex color pipeline |
+| 32 / 33 | albedo / raw albedo | texture binding correctness |
+| 42 | white noise | GPU pipeline aliveness |
+| 55 | texcoords | UV correctness after FFP conversion |
+| 181 | is emissive | category tagging verification |
+| 276 / 277 | primitive index / primitive index hash | draw coverage; per-primitive ordering — **flickers by design, not a hash-stability test** |
+
+Indices are from the dxvk-remix 08e8f1b7 runtime (Remix 1329); they shift between runtime versions, so
+confirm the name in the Remix menu's Debug View list when targeting another build.
 
 The geometry-hash flicker test (fully scriptable):
 1. `livetools remix preset apply debug-geometry-hash -d <gamedir>` and restart the game.
@@ -167,7 +170,7 @@ Choosing a generation rule:
   `--hash-stability` flags up-draws, dynamic VBs, vb-churn): drop the
   per-frame-varying tokens — `indices,geometrydescriptor,vertexlayout,vertexshader`
   (preset `hash-stable-anim`). Tradeoff: meshes sharing index buffer + layout
-  + shader may collide; verify with debug view 277 + `rtx.hashCollisionDetection.enable`.
+  + shader may collide; verify with debug view 10 (geometry hash) + `rtx.hashCollisionDetection.enable`.
 - Keep `rtx.geometryAssetHashRuleString` at default unless captures show
   mismatched replacement anchoring — changing it invalidates existing mod
   captures/replacements.
@@ -310,7 +313,7 @@ deterministic; leave them on for the final look check, not for A/B tests.
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | Black screen, geometry visible in debug view 1/11 | No game lights converted | preset `fallback-light-always`, then tune `rtx.lightConversion*`; production: real lights + `fallback-light-off` |
-| Scene renders but replacements/tags don't stick between runs | Unstable geometry hashes | `dx9tracer analyze --hash-stability`; preset `hash-stable-anim`; verify with debug view 277 flicker test |
+| Scene renders but replacements/tags don't stick between runs | Unstable geometry hashes | `dx9tracer analyze --hash-stability`; preset `hash-stable-anim`; verify with the debug view 10 still-camera test |
 | Textures flicker / wrong texture on objects | Pooled textures rewritten by game | `rtx.recomputeTextureHashOnWrite = True` (watch animated-texture side effects) |
 | HUD/UI raytraced into the world or missing | UI not tagged | add HUD texture hashes to `rtx.uiTextures` (pretransformed draws in `--hash-stability` output are the candidates) |
 | Sky missing / drawn as near geometry | Sky not identified | `remix preset apply sky-autodetect` first (no hashes needed); then `rtx.skyBoxTextures` from a capture, or `skyDrawcallIdThreshold` for early untextured sky draws; 3D skybox: `rtx.skyReprojectToMainCameraSpace` |

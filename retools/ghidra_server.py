@@ -27,14 +27,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ghidra_client import HOST, PORT, state_path, _recv_raw, _send_raw
 import pyghidra_backend as pb
+from workspace import game_dir
 
-_PROJECT = Path(__file__).resolve().parent.parent
 
 
 class GhidraDaemon:
     def __init__(self, game: str, idle: float = 600.0):
         self.game = game
-        self.project_dir = str(_PROJECT / "patches" / game / "ghidra")
+        self.project_dir = str(game_dir(game) / "ghidra")
         self.binary = None
         self.port = PORT
         self.idle = idle

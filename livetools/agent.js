@@ -308,6 +308,19 @@ var fenceCounter = 0;
 var fenceListener = null;
 var BATCH_SIZE = 64;
 
+// Microsecond clock for per-call durations (Date.now() is millisecond-grained). Windows only; elsewhere
+// records carry no dur_us.
+var qpcUs = (function () {
+    var k32 = Process.findModuleByName('kernel32.dll');
+    if (!k32) return null;
+    var qpc = new NativeFunction(k32.getExportByName('QueryPerformanceCounter'), 'int', ['pointer']);
+    var qpf = new NativeFunction(k32.getExportByName('QueryPerformanceFrequency'), 'int', ['pointer']);
+    var buf = Memory.alloc(8);
+    qpf(buf);
+    var ticksPerUs = buf.readU64().toNumber() / 1e6;
+    return function () { qpc(buf); return buf.readU64().toNumber() / ticksPerUs; };
+})();
+
 function installTrace(addrStr, config) {
     var id = nextTraceId++;
     var enterSpecs = parseReadSpecs(config.readEnter || '');
@@ -343,6 +356,7 @@ function installTrace(addrStr, config) {
                     this._traceEnter = { regs: regs, reads: reads };
                     this._traceCaller = ptrToHex(this.returnAddress);
                     this._traceTs = Date.now();
+                    this._traceUs = qpcUs ? qpcUs() : 0;
                 } catch (e) {
                     send({ type: 'trace_error', traceId: id, phase: 'enter', error: e.message, stack: e.stack || '' });
                     this._traceSkip = true;
@@ -369,6 +383,10 @@ function installTrace(addrStr, config) {
                         enter: this._traceEnter,
                         leave: leaveData
                     };
+                    if (qpcUs) {
+                        record.us = Math.round(this._traceUs);
+                        record.dur_us = Math.round(qpcUs() - this._traceUs);
+                    }
 
                     buffer.push(record);
                     collected++;

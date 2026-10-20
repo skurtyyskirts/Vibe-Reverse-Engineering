@@ -1725,6 +1725,46 @@ def build_parser() -> argparse.ArgumentParser:
     ss_stats.add_argument("--stride", type=int, default=4,
         help="Sample every Nth pixel per axis (default: 4)")
 
+    # -- sample --
+    sp = sub.add_parser("sample",
+        help="Sampling CPU profiler (no Frida): record a live process, report offline",
+        description=(
+            "record: suspend/read/resume the busiest threads round-robin, saving each\n"
+            "thread's instruction pointer and the stack words that point into a loaded\n"
+            "module, plus the process's module list, to a self-contained .jsonl.gz.\n"
+            "Works on 32-bit (WOW64) and 64-bit targets; several processes can be\n"
+            "recorded at once from separate shells.\n\n"
+            "report: self and inclusive time per function and the hottest call paths,\n"
+            "per thread, offline. Symbols come from a GUID-matched PDB next to each\n"
+            "module, an index.db (--names exe=PATH), or exports.\n\n"
+            "Examples:\n"
+            "  python -m livetools sample record NvRemixBridge.exe --duration 20 --out bridge.jsonl.gz\n"
+            "  python -m livetools sample record trl.exe --top 2 --hz 1000 --out game.jsonl.gz\n"
+            "  python -m livetools sample report bridge.jsonl.gz\n"
+            "  python -m livetools sample report game.jsonl.gz --names trl.exe=patches/TRL/index.db"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    smp_sub = sp.add_subparsers(dest="sample_action")
+    smp_rec = smp_sub.add_parser("record", help="Sample a live process to a .jsonl.gz")
+    smp_rec.add_argument("target", help="Process exe name or pid")
+    smp_rec.add_argument("--out", "-o", required=True, help="Output .jsonl.gz path")
+    smp_rec.add_argument("--duration", type=float, default=20.0, help="Seconds to sample (default 20)")
+    smp_rec.add_argument("--hz", type=float, default=500.0,
+        help="Samples per second per thread (default 500)")
+    smp_rec.add_argument("--top", type=int, default=6,
+        help="Sample the N busiest threads, from a CPU pre-pass (default 6)")
+    smp_rec.add_argument("--tids", default=None, help="Comma-separated thread ids instead of --top")
+    smp_rec.add_argument("--stack-words", type=int, default=512,
+        help="Stack words read per sample for caller attribution (default 512)")
+    smp_rec.add_argument("--prepass", type=float, default=1.0,
+        help="Seconds of CPU measurement used to pick the busiest threads (default 1)")
+    smp_rep = smp_sub.add_parser("report", help="Symbolized profile of a recording")
+    smp_rep.add_argument("file", help="Recording (.jsonl.gz)")
+    smp_rep.add_argument("--names", action="append", default=[], metavar="MODULE=INDEX_DB",
+        help="Function names for a module from a retools index.db (repeatable)")
+    smp_rep.add_argument("--top", type=int, default=25, help="Rows per table (default 25)")
+    smp_rep.add_argument("--out", default=None, help="Also write the report to this text file")
+
     # -- health --
     sp = sub.add_parser("health",
         help="Is the game running, responding, rendering, or crashed?",
@@ -1977,6 +2017,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 # ── main ───────────────────────────────────────────────────────────────────
 
+def cmd_sample(args: argparse.Namespace) -> int:
+    action = getattr(args, "sample_action", None)
+    if action == "record":
+        from . import sampler
+        tids = [int(t) for t in args.tids.split(",")] if args.tids else None
+        try:
+            header = sampler.record(args.target, Path(args.out), args.duration, args.hz, args.top, tids,
+                                    args.stack_words, args.prepass)
+        except (LookupError, OSError) as e:
+            print(f"[error] {e}")
+            return EXIT_FAILED
+        print(f"Saved {args.out}: {header['samples']} samples, pid {header['pid']} "
+              f"({'x86' if header['wow64'] else 'x64'}), {len(header['modules'])} modules")
+        for th in header["threads"]:
+            print(f"  tid {th['tid']}  cpu {th['cpu']}  start 0x{th['start']:X}")
+        return 0
+    if action == "report":
+        from . import profile_report
+        names = dict(n.split("=", 1) for n in args.names)
+        text = profile_report.report(Path(args.file), names, top=args.top)
+        print(text)
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+        return 0
+    print("Usage: python -m livetools sample [record|report]")
+    return EXIT_FAILED
+
+
 def main(argv: list[str] | None = None) -> int:
     """Dispatch a subcommand.
 
@@ -2027,6 +2095,7 @@ def main(argv: list[str] | None = None) -> int:
         "analyze": cmd_analyze,
         "gamectl": cmd_gamectl,
         "screenshot": cmd_screenshot,
+        "sample": cmd_sample,
         "health": cmd_health,
         "proc": cmd_proc,
         "remix": cmd_remix,

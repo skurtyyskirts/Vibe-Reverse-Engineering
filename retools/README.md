@@ -29,6 +29,7 @@ Run all tools from the repo root: `python -m retools.<tool> <args>`
 | `readmem` | Read typed data from a PE file at a given address |
 | `throwmap` | Map MSVC C++ `_CxxThrowException` call sites to error strings |
 | `dumpinfo` | Minidump analysis — exception, threads, stack, memory |
+| `pdbtypes` | Pure-Python MSVC PDB reader — struct/enum dumps as C, procedures with sizes, globals with types |
 
 ---
 
@@ -49,6 +50,11 @@ python -m retools.sigdb fingerprint game.exe
 
 # Bootstrap a new binary (seeds KB with RTTI, signatures, compiler info)
 python -m retools.bootstrap game.exe --project patches/MyGame
+
+# Read types and symbols from a PDB (no DIA / llvm-pdbutil needed)
+python -m retools.pdbtypes game.pdb struct Level -r 1
+python -m retools.pdbtypes game.pdb procs "^LIGHT_" -n 2 --sig
+python -m retools.pdbtypes game.pdb globals "(?i)light"
 ```
 
 ---
